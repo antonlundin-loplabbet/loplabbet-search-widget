@@ -1,485 +1,382 @@
 /**
- * Löplabbet Search Widget v3
- * Renare layout. Sidor sorterade efter senaste uppdatering (nyast först).
- *
- * Konfiguration:
- *   window.LOPLABBET_SEARCH_CONFIG = {
- *     typesenseHost: '...',
- *     typesenseSearchKey: '...',
- *     searchInputSelector: 'input[type="search"]',
- *     fallbackSearchUrl: '/katalog?q='
- *   };
- *   <script src=".../search-widget.js"></script>
+ * Löplabbet Search Widget v4
+ * - Sidor grupperade: Guider → Tipsar → Landningssidor → övriga
+ * - Produkter: skor/klockor/näring som standard
+ * - Kläder visas bara när man söker klädesord
  */
-
 (function () {
   "use strict";
 
-  const cfg = Object.assign(
-    {
-      typesenseHost: "h5kyqpilug0b769np-1.a1.typesense.net",
-      typesenseSearchKey: "",
-      searchInputSelector: 'input[placeholder*="sök" i], input[placeholder*="hitta" i], input[type="search"]',
-      fallbackSearchUrl: "/katalog?q=",
-      debounceMs: 120,
-      perPageProducts: 6,
-      perPagePages: 5,
-      brandColor: "#E91E7B",
-    },
-    window.LOPLABBET_SEARCH_CONFIG || {}
-  );
+  // ── Konfiguration ──────────────────────────────────────────────────────
+  const HOST    = "h5kyqpilug0b769np-1.a1.typesense.net";
+  const API_KEY = "r9WyqVZBkIH9WhbcT57jWa2HzHxehiFc";
+  const PINK    = "#E91E7B";
+  const SEARCH_URL = `https://${HOST}/multi_search`;
 
-  if (!cfg.typesenseSearchKey) {
-    console.warn("[Löplabbet Search] typesenseSearchKey saknas i config.");
-    return;
+  // Ord i SÖKTERMEN som triggar klädesvisning
+  const CLOTHING_QUERY_KW = [
+    "kläder","tights","shorts","tröja","jacka","väst","kjol","singlet",
+    "strumpa","strumpor","handskar","mössa","buff","byxa","t-shirt","skjorta",
+    "overall","long sleeve","langärm"
+  ];
+
+  // Ord i PRODUKTNAMNET som klassas som klädesplagg (lowercase-match)
+  const CLOTHING_PRODUCT_KW = [
+    "tights","shorts","tröja","t-shirt","jacka","kjol","singlet","strumpa",
+    "löparkjol","löpartights","löparshorts","byxa","väst","mössa","handskar",
+    "buff","top ","tank","long sleeve","langärm","skjorta"
+  ];
+
+  // Sidors sektioner — ordning = visningsordning i dropdown
+  const SECTION_ORDER = [
+    { key: "Produktguider", label: "Guider"       },
+    { key: "Tipsar",        label: "Tipsar"        },
+    { key: "Landningssida", label: "Landningssidor"},
+    { key: "Tidsbokning",   label: "Tidsbokning"   },
+    { key: "Varumärken",    label: "Varumärken"    },
+    { key: "Butiker",       label: "Butiker"       },
+    { key: "Om oss",        label: "Om oss"        },
+    { key: "Kundservice",   label: "Kundservice"   },
+  ];
+
+  const MAX_PAGES_PER_SECTION = 3; // max träffar per sektion
+  const MAX_PAGES_SECTIONS    = 3; // max antal sektioner att visa
+  const MAX_PRODUCTS          = 8;
+  const MIN_QUERY_LENGTH      = 2;
+  const DEBOUNCE_MS           = 200;
+
+  // ── Hjälpfunktioner ────────────────────────────────────────────────────
+  function isClothingSearch(query) {
+    const q = query.toLowerCase();
+    return CLOTHING_QUERY_KW.some(kw => q.includes(kw));
   }
 
-  // ── Stilar ───────────────────────────────────────────────────────────────
-  const styles = `
-    .ll-search-overlay {
-      position: absolute;
-      background: #fff;
-      border: 1px solid #eee;
-      border-radius: 8px;
-      box-shadow: 0 12px 40px rgba(0,0,0,.18);
-      z-index: 99999;
-      max-height: 80vh;
-      overflow: hidden;
-      display: none;
-      flex-direction: column;
-      font-family: inherit;
-    }
-    .ll-search-overlay.is-open { display: flex; }
-    .ll-search-scroll { overflow-y: auto; flex: 1; }
+  function isClothingProduct(hit) {
+    const name = (hit.document?.name || "").toLowerCase();
+    return CLOTHING_PRODUCT_KW.some(kw => name.includes(kw));
+  }
 
-    .ll-search-section { border-bottom: 1px solid #f4f4f4; }
-    .ll-search-section:last-child { border-bottom: 0; }
+  function groupPagesBySection(hits) {
+    const map = {};
+    for (const hit of hits) {
+      const section = hit.document?.section || "Övrigt";
+      if (!map[section]) map[section] = [];
+      map[section].push(hit);
+    }
+    // Sortera enligt SECTION_ORDER, okända sektioner sist
+    const ordered = [];
+    const seen = new Set();
+    for (const { key } of SECTION_ORDER) {
+      if (map[key]) { ordered.push({ key, hits: map[key] }); seen.add(key); }
+    }
+    for (const key of Object.keys(map)) {
+      if (!seen.has(key)) ordered.push({ key, hits: map[key] });
+    }
+    return ordered;
+  }
 
-    .ll-search-section-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 14px 18px 6px;
-      font-size: 11px;
-      letter-spacing: .12em;
-      text-transform: uppercase;
-      color: #888;
-      font-weight: 600;
-    }
-    .ll-search-section-header a {
-      color: ${cfg.brandColor};
-      text-decoration: none;
-      font-weight: 600;
-      letter-spacing: .04em;
-    }
-    .ll-search-section-header a:hover { text-decoration: underline; }
-
-    /* ── Sidor (kompakt, bara titel) ── */
-    .ll-search-pages-list {
-      list-style: none;
-      margin: 0;
-      padding: 4px 0 12px;
-    }
-    .ll-search-page-item {
-      display: block;
-      padding: 8px 18px;
-      cursor: pointer;
-      text-decoration: none;
-      color: #111;
-      font-size: 14px;
-      transition: background .12s ease;
-      border-left: 3px solid transparent;
-    }
-    .ll-search-page-item:hover,
-    .ll-search-page-item.is-active {
-      background: #faf7f9;
-      border-left-color: ${cfg.brandColor};
-    }
-
-    /* ── Produkter ── */
-    .ll-search-products-list {
-      list-style: none;
-      margin: 0;
-      padding: 4px 0 12px;
-    }
-    .ll-search-product-item {
-      display: flex;
-      gap: 14px;
-      padding: 10px 18px;
-      cursor: pointer;
-      align-items: center;
-      text-decoration: none;
-      color: inherit;
-      transition: background .12s ease;
-      border-left: 3px solid transparent;
-    }
-    .ll-search-product-item:hover,
-    .ll-search-product-item.is-active {
-      background: #faf7f9;
-      border-left-color: ${cfg.brandColor};
-    }
-    .ll-search-thumb {
-      width: 56px;
-      height: 56px;
-      flex-shrink: 0;
-      border-radius: 6px;
-      background: #f4f4f4 center/cover no-repeat;
-    }
-    .ll-search-info {
-      flex: 1;
-      min-width: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
-    .ll-search-brand {
-      font-size: 10px;
-      letter-spacing: .12em;
-      text-transform: uppercase;
-      color: #888;
-      font-weight: 600;
-    }
-    .ll-search-name {
-      font-size: 14px;
-      font-weight: 500;
-      line-height: 1.3;
-      color: #111;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .ll-search-meta {
-      font-size: 11px;
-      color: #999;
-      margin-top: 1px;
-    }
-    .ll-search-price {
-      flex-shrink: 0;
-      text-align: right;
-      font-size: 14px;
-      font-weight: 600;
-      color: #111;
-      display: flex;
-      flex-direction: column;
-      align-items: flex-end;
-    }
-    .ll-search-price-original {
-      text-decoration: line-through;
-      color: #999;
-      font-weight: 400;
-      font-size: 12px;
-    }
-    .ll-search-price-sale { color: ${cfg.brandColor}; }
-    .ll-search-stock-out {
-      font-size: 9px;
-      letter-spacing: .12em;
-      text-transform: uppercase;
-      color: #c00;
-      font-weight: 600;
-      margin-top: 2px;
-    }
-
-    /* ── Övrigt ── */
-    .ll-search-empty,
-    .ll-search-loading,
-    .ll-search-error {
-      padding: 24px 18px;
-      color: #999;
-      font-size: 13px;
-      text-align: center;
-    }
-    .ll-search-footer {
-      padding: 12px 18px;
-      border-top: 1px solid #f4f4f4;
-      text-align: center;
-      background: #fafafa;
-    }
-    .ll-search-footer a {
-      color: ${cfg.brandColor};
-      text-decoration: none;
-      font-size: 13px;
-      font-weight: 600;
-    }
-    .ll-search-footer a:hover { text-decoration: underline; }
-
-    @media (max-width: 600px) {
-      .ll-search-overlay { max-height: 75vh; }
-      .ll-search-thumb { width: 44px; height: 44px; }
-      .ll-search-name, .ll-search-page-item { font-size: 13px; }
-    }
-  `;
-
-  // ── Hjälpfunktioner ──────────────────────────────────────────────────────
-  function debounce(fn, ms) {
-    let t;
-    return function (...args) {
-      clearTimeout(t);
-      t = setTimeout(() => fn.apply(this, args), ms);
-    };
+  function getHighlightedTitle(hit) {
+    const hl = hit.highlights?.find(h => h.field === "title");
+    return hl?.snippet || hit.document?.title || "";
   }
 
   function formatPrice(p) {
-    return Math.round(p) + " kr";
+    return p ? Math.round(p).toLocaleString("sv-SE") + " kr" : "";
   }
 
-  function escape(s) {
-    return String(s ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+  function esc(str) {
+    return String(str || "")
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;")
+      .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   }
 
-  function injectStyles() {
-    if (document.getElementById("ll-search-styles")) return;
-    const s = document.createElement("style");
-    s.id = "ll-search-styles";
-    s.textContent = styles;
-    document.head.appendChild(s);
-  }
-
-  function buildOverlay() {
-    const el = document.createElement("div");
-    el.className = "ll-search-overlay";
-    document.body.appendChild(el);
-    return el;
-  }
-
-  function positionOverlay(overlay, input) {
-    const rect = input.getBoundingClientRect();
-    const scrollY = window.scrollY || document.documentElement.scrollTop;
-    overlay.style.top = rect.bottom + scrollY + 8 + "px";
-    overlay.style.left = rect.left + "px";
-    overlay.style.width = rect.width + "px";
-  }
-
-  // ── Typesense multi-search ───────────────────────────────────────────────
-  async function searchBoth(query) {
-    const url = `https://${cfg.typesenseHost}/multi_search`;
+  // ── Typesense multi_search ─────────────────────────────────────────────
+  async function search(query) {
     const body = {
       searches: [
         {
           collection: "products",
           q: query,
-          query_by: "name,brand,description",
-          query_by_weights: "4,3,1",
-          prefix: "true",
-          num_typos: "2",
-          per_page: cfg.perPageProducts,
-          include_fields:
-            "id,name,brand,category,subcategory,price,sale_price,on_sale,image_url,product_url,in_stock",
-          sort_by: "_text_match:desc,popularity:desc",
+          query_by: "name,brand",
+          num_typos: 2,
+          per_page: 20,
+          sort_by: "_text_match:desc"
         },
         {
           collection: "pages",
           q: query,
           query_by: "title,description,content",
-          query_by_weights: "5,2,1",
-          prefix: "true",
-          num_typos: "2",
-          per_page: cfg.perPagePages,
-          include_fields: "id,title,url",
-          // Sortera efter relevans, sedan nyast först (så 2026 kommer före 2025)
-          sort_by: "_text_match:desc,lastmod:desc",
-        },
-      ],
+          num_typos: 2,
+          per_page: 30,
+          sort_by: "lastmod:desc"
+        }
+      ]
     };
-
-    const res = await fetch(url, {
+    const res = await fetch(`${SEARCH_URL}?x-typesense-api-key=${API_KEY}`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-TYPESENSE-API-KEY": cfg.typesenseSearchKey,
-      },
-      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
     });
-
     if (!res.ok) throw new Error(`Typesense ${res.status}`);
-    const data = await res.json();
-    return {
-      products: data.results[0],
-      pages: data.results[1],
-    };
+    return res.json();
   }
 
-  // ── Rendering ────────────────────────────────────────────────────────────
-  function renderLoading(overlay) {
-    overlay.innerHTML = `<div class="ll-search-loading">Söker...</div>`;
-  }
+  // ── Rendera dropdown ───────────────────────────────────────────────────
+  function renderDropdown(container, query, results, searchUrl) {
+    const [prodResult, pageResult] = results.results;
+    const clothing = isClothingSearch(query);
 
-  function renderError(overlay) {
-    overlay.innerHTML = `<div class="ll-search-error">Något gick fel. Tryck Enter för vanlig sökning.</div>`;
-  }
-
-  function renderEmpty(overlay, query) {
-    overlay.innerHTML = `
-      <div class="ll-search-empty">
-        Inga träffar för <strong>${escape(query)}</strong>
-      </div>
-      <div class="ll-search-footer">
-        <a href="${cfg.fallbackSearchUrl}${encodeURIComponent(query)}">Sök ändå →</a>
-      </div>`;
-  }
-
-  function renderPages(pages) {
-    if (!pages || !pages.hits || pages.hits.length === 0) return "";
-
-    const items = pages.hits
-      .map((hit) => {
-        const p = hit.document;
-        return `<a class="ll-search-page-item" href="${escape(p.url)}">${escape(p.title)}</a>`;
-      })
-      .join("");
-
-    return `
-      <div class="ll-search-section">
-        <div class="ll-search-section-header">
-          <span>Sidor</span>
-        </div>
-        <div class="ll-search-pages-list">${items}</div>
-      </div>`;
-  }
-
-  function renderProducts(products, query) {
-    if (!products || !products.hits || products.hits.length === 0) return "";
-
-    const items = products.hits
-      .map((hit) => {
-        const p = hit.document;
-        const onSale = p.on_sale && p.sale_price;
-        const priceHtml = onSale
-          ? `<span class="ll-search-price-original">${formatPrice(p.price)}</span>
-             <span class="ll-search-price-sale">${formatPrice(p.sale_price)}</span>`
-          : `<span>${formatPrice(p.price)}</span>`;
-        const stockHtml = !p.in_stock
-          ? `<div class="ll-search-stock-out">Slut i lager</div>`
-          : "";
-        const meta = [p.category, p.subcategory].filter(Boolean).join(" · ");
-
-        return `
-          <a class="ll-search-product-item" href="${escape(p.product_url)}">
-            <div class="ll-search-thumb" style="background-image:url('${escape(p.image_url)}')"></div>
-            <div class="ll-search-info">
-              <div class="ll-search-brand">${escape(p.brand)}</div>
-              <div class="ll-search-name">${escape(p.name)}</div>
-              ${meta ? `<div class="ll-search-meta">${escape(meta)}</div>` : ""}
-            </div>
-            <div class="ll-search-price">
-              ${priceHtml}
-              ${stockHtml}
-            </div>
-          </a>`;
-      })
-      .join("");
-
-    return `
-      <div class="ll-search-section">
-        <div class="ll-search-section-header">
-          <span>Produkter</span>
-          <a href="${cfg.fallbackSearchUrl}${encodeURIComponent(query)}">Visa alla →</a>
-        </div>
-        <div class="ll-search-products-list">${items}</div>
-      </div>`;
-  }
-
-  function renderResults(overlay, data, query) {
-    const totalProducts = data.products?.found || 0;
-    const totalPages = data.pages?.found || 0;
-
-    if (totalProducts === 0 && totalPages === 0) {
-      return renderEmpty(overlay, query);
+    // Filtrera produkter
+    let productHits = prodResult?.hits || [];
+    if (!clothing) {
+      productHits = productHits.filter(h => !isClothingProduct(h));
     }
+    productHits = productHits.slice(0, MAX_PRODUCTS);
 
-    overlay.innerHTML = `
-      <div class="ll-search-scroll">
-        ${renderPages(data.pages)}
-        ${renderProducts(data.products, query)}
-      </div>
-      <div class="ll-search-footer">
-        <a href="${cfg.fallbackSearchUrl}${encodeURIComponent(query)}">
-          Visa alla resultat för "${escape(query)}" →
-        </a>
-      </div>`;
-  }
+    // Gruppera sidor
+    const allPageHits = pageResult?.hits || [];
+    const sectionGroups = groupPagesBySection(allPageHits);
+    const visibleGroups = sectionGroups.slice(0, MAX_PAGES_SECTIONS);
 
-  // ── Init ─────────────────────────────────────────────────────────────────
-  function init() {
-    const input = document.querySelector(cfg.searchInputSelector);
-    if (!input) {
-      console.warn("[Löplabbet Search] Hittade ingen sökruta.");
+    const hasPages    = visibleGroups.some(g => g.hits.length > 0);
+    const hasProducts = productHits.length > 0;
+
+    if (!hasPages && !hasProducts) {
+      container.innerHTML = `<div style="padding:20px 16px;color:#666;font-size:14px;">Inga resultat för "<strong>${esc(query)}</strong>"</div>`;
       return;
     }
 
-    injectStyles();
-    const overlay = buildOverlay();
-    let activeIndex = -1;
+    let html = "";
 
-    const doSearch = debounce(async (query) => {
-      if (!query || query.trim().length < 2) {
-        overlay.classList.remove("is-open");
-        return;
+    // ── SIDOR ──────────────────────────────────────────────────────────
+    if (hasPages) {
+      html += `<div class="lls-section-header">Sidor</div>`;
+      for (const group of visibleGroups) {
+        const sectionLabel = SECTION_ORDER.find(s => s.key === group.key)?.label || group.key;
+        const hits = group.hits.slice(0, MAX_PAGES_PER_SECTION);
+        html += `<div class="lls-section-subheader">${esc(sectionLabel)}</div>`;
+        for (const hit of hits) {
+          const title = getHighlightedTitle(hit);
+          const url   = esc(hit.document?.url || "#");
+          html += `
+            <a class="lls-page-row" href="${url}">
+              <span class="lls-page-icon">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              </span>
+              <span class="lls-page-title">${title}</span>
+            </a>`;
+        }
       }
-      renderLoading(overlay);
-      positionOverlay(overlay, input);
-      overlay.classList.add("is-open");
+    }
 
-      try {
-        const data = await searchBoth(query.trim());
-        renderResults(overlay, data, query.trim());
-        activeIndex = -1;
-      } catch (e) {
-        console.error("[Löplabbet Search]", e);
-        renderError(overlay);
+    // ── PRODUKTER ──────────────────────────────────────────────────────
+    if (hasProducts) {
+      html += `
+        <div class="lls-section-header lls-products-header">
+          <span>Produkter</span>
+          <a class="lls-visa-alla" href="${esc(searchUrl)}">Visa alla →</a>
+        </div>`;
+      for (const hit of productHits) {
+        const d         = hit.document;
+        const name      = esc(d.name || "");
+        const brand     = esc(d.brand || "");
+        const url       = esc(d.url || "#");
+        const img       = esc(d.image || "");
+        const price     = d.price;
+        const salePrice = d.salePrice;
+        const hasDisc   = salePrice && salePrice < price;
+        const priceHtml = hasDisc
+          ? `<span class="lls-price-old">${formatPrice(price)}</span><span class="lls-price-sale">${formatPrice(salePrice)}</span>`
+          : `<span class="lls-price">${formatPrice(price)}</span>`;
+
+        html += `
+          <a class="lls-product-row" href="${url}">
+            <div class="lls-product-img">
+              ${img ? `<img src="${img}" alt="${name}" loading="lazy">` : ""}
+            </div>
+            <div class="lls-product-info">
+              <div class="lls-product-brand">${brand}</div>
+              <div class="lls-product-name">${name}</div>
+            </div>
+            <div class="lls-product-price">${priceHtml}</div>
+          </a>`;
       }
-    }, cfg.debounceMs);
+    }
 
-    input.addEventListener("input", (e) => doSearch(e.target.value));
+    html += `
+      <div class="lls-footer">
+        <a href="${esc(searchUrl)}">Visa alla resultat för "${esc(query)}" →</a>
+      </div>`;
 
-    input.addEventListener("focus", (e) => {
-      if (e.target.value.trim().length >= 2) {
-        positionOverlay(overlay, input);
-        overlay.classList.add("is-open");
-      }
-    });
-
-    document.addEventListener("click", (e) => {
-      if (!overlay.contains(e.target) && e.target !== input) {
-        overlay.classList.remove("is-open");
-      }
-    });
-
-    input.addEventListener("keydown", (e) => {
-      if (!overlay.classList.contains("is-open")) return;
-      const items = overlay.querySelectorAll(".ll-search-page-item, .ll-search-product-item");
-      if (!items.length) return;
-
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        activeIndex = Math.min(activeIndex + 1, items.length - 1);
-        updateActive(items, activeIndex);
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        activeIndex = Math.max(activeIndex - 1, -1);
-        updateActive(items, activeIndex);
-      } else if (e.key === "Enter" && activeIndex >= 0) {
-        e.preventDefault();
-        items[activeIndex].click();
-      } else if (e.key === "Escape") {
-        overlay.classList.remove("is-open");
-      }
-    });
-
-    window.addEventListener("resize", () => positionOverlay(overlay, input));
-    window.addEventListener("scroll", () => positionOverlay(overlay, input), {
-      passive: true,
-    });
+    container.innerHTML = html;
   }
 
-  function updateActive(items, idx) {
-    items.forEach((it, i) => {
-      it.classList.toggle("is-active", i === idx);
-      if (i === idx) it.scrollIntoView({ block: "nearest" });
+  // ── CSS ────────────────────────────────────────────────────────────────
+  function injectStyles() {
+    if (document.getElementById("lls-styles")) return;
+    const s = document.createElement("style");
+    s.id = "lls-styles";
+    s.textContent = `
+      #lls-dropdown {
+        position:absolute; z-index:99999;
+        background:#fff; border:1px solid #e8e8e8;
+        border-radius:8px; box-shadow:0 8px 32px rgba(0,0,0,.12);
+        max-height:80vh; overflow-y:auto;
+        min-width:320px;
+      }
+      .lls-section-header {
+        display:flex; align-items:center; justify-content:space-between;
+        padding:10px 16px 4px;
+        font-size:11px; font-weight:700; letter-spacing:.08em;
+        text-transform:uppercase; color:#999;
+        border-top:1px solid #f0f0f0;
+      }
+      .lls-section-header:first-child { border-top:none; }
+      .lls-products-header { margin-top:4px; }
+      .lls-section-subheader {
+        padding:6px 16px 2px;
+        font-size:11px; font-weight:600; color:${PINK};
+        letter-spacing:.04em;
+      }
+      .lls-page-row {
+        display:flex; align-items:center; gap:8px;
+        padding:7px 16px; text-decoration:none; color:#222;
+        transition:background .12s;
+      }
+      .lls-page-row:hover { background:#fafafa; }
+      .lls-page-icon { color:#bbb; flex-shrink:0; margin-top:1px; }
+      .lls-page-title { font-size:13.5px; line-height:1.3; }
+      .lls-page-title em { font-style:normal; font-weight:700; color:#111; }
+      .lls-visa-alla {
+        font-size:11px; font-weight:600; color:${PINK};
+        text-decoration:none; letter-spacing:.02em;
+      }
+      .lls-visa-alla:hover { text-decoration:underline; }
+      .lls-product-row {
+        display:flex; align-items:center; gap:10px;
+        padding:8px 16px; text-decoration:none; color:#222;
+        transition:background .12s;
+      }
+      .lls-product-row:hover { background:#fafafa; }
+      .lls-product-img {
+        width:48px; height:48px; flex-shrink:0;
+        border-radius:4px; overflow:hidden;
+        background:#f5f5f5; display:flex; align-items:center; justify-content:center;
+      }
+      .lls-product-img img { width:100%; height:100%; object-fit:contain; }
+      .lls-product-info { flex:1; min-width:0; }
+      .lls-product-brand { font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:#999; }
+      .lls-product-name  { font-size:13px; line-height:1.3; color:#111;
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .lls-product-price { flex-shrink:0; text-align:right; font-size:13px; }
+      .lls-price         { font-weight:600; color:#111; }
+      .lls-price-old     { display:block; color:#aaa; text-decoration:line-through; font-size:11px; }
+      .lls-price-sale    { display:block; color:${PINK}; font-weight:700; }
+      .lls-footer {
+        padding:12px 16px; border-top:1px solid #f0f0f0; text-align:center;
+      }
+      .lls-footer a {
+        font-size:13px; color:${PINK}; text-decoration:none; font-weight:600;
+      }
+      .lls-footer a:hover { text-decoration:underline; }
+    `;
+    document.head.appendChild(s);
+  }
+
+  // ── Hitta sökfältet ────────────────────────────────────────────────────
+  function findSearchInput() {
+    const candidates = [
+      'input[type="search"]',
+      'input[name="q"]',
+      'input[placeholder*="sök" i]',
+      'input[placeholder*="search" i]',
+      ".search-field input",
+      "#search-input",
+    ];
+    for (const sel of candidates) {
+      const el = document.querySelector(sel);
+      if (el) return el;
+    }
+    return null;
+  }
+
+  // ── Skapa dropdown ─────────────────────────────────────────────────────
+  function createDropdown(input) {
+    let dropdown = document.getElementById("lls-dropdown");
+    if (!dropdown) {
+      dropdown = document.createElement("div");
+      dropdown.id = "lls-dropdown";
+      dropdown.style.display = "none";
+      // Positionera relativt föräldern
+      const parent = input.closest("form, .search-wrapper, .header-search, header") || input.parentElement;
+      if (getComputedStyle(parent).position === "static") parent.style.position = "relative";
+      parent.appendChild(dropdown);
+    }
+    return dropdown;
+  }
+
+  function positionDropdown(dropdown, input) {
+    const rect = input.getBoundingClientRect();
+    const parentRect = dropdown.parentElement.getBoundingClientRect();
+    dropdown.style.top  = (rect.bottom - parentRect.top + 4) + "px";
+    dropdown.style.left = (rect.left - parentRect.left) + "px";
+    dropdown.style.width = Math.max(rect.width, 440) + "px";
+  }
+
+  // ── Init ───────────────────────────────────────────────────────────────
+  function init() {
+    injectStyles();
+    const input = findSearchInput();
+    if (!input) { console.warn("[LLS] Hittade inget sökfält."); return; }
+
+    const dropdown = createDropdown(input);
+    let debounceTimer;
+    let lastQuery = "";
+    let currentRequest = 0;
+
+    function closeDropdown() {
+      dropdown.style.display = "none";
+    }
+
+    input.addEventListener("input", () => {
+      clearTimeout(debounceTimer);
+      const query = input.value.trim();
+      if (query.length < MIN_QUERY_LENGTH) { closeDropdown(); return; }
+      if (query === lastQuery) return;
+
+      debounceTimer = setTimeout(async () => {
+        lastQuery = query;
+        const reqId = ++currentRequest;
+        try {
+          const data = await search(query);
+          if (reqId !== currentRequest) return; // inaktuellt svar
+          const encQ = encodeURIComponent(query);
+          const searchUrl = `https://www.loplabbet.se/search?q=${encQ}`;
+          renderDropdown(dropdown, query, data, searchUrl);
+          positionDropdown(dropdown, input);
+          dropdown.style.display = "block";
+        } catch (e) {
+          console.error("[LLS]", e);
+        }
+      }, DEBOUNCE_MS);
     });
+
+    // Stäng vid klick utanför
+    document.addEventListener("click", (e) => {
+      if (!dropdown.contains(e.target) && e.target !== input) closeDropdown();
+    });
+
+    // Stäng vid Escape
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { closeDropdown(); input.blur(); }
+    });
+
+    // Flytta om fönstret ändrar storlek
+    window.addEventListener("resize", () => {
+      if (dropdown.style.display !== "none") positionDropdown(dropdown, input);
+    });
+
+    console.log("[LLS] Search widget v4 redo.");
   }
 
   if (document.readyState === "loading") {
