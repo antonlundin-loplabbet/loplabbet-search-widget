@@ -286,11 +286,11 @@
         </div>`;
       for (const hit of productHits) {
         const d   = hit.document;
-        const url = esc(d.url || "#");
-        const img = esc(d.image || "");
-        const hasDisc = d.salePrice && d.salePrice < d.price;
+        const url = esc(d.product_url || "#");
+        const img = esc(d.image_url || "");
+        const hasDisc = d.sale_price && d.sale_price < d.price;
         const priceHtml = hasDisc
-          ? `<s class="lls-p-old">${formatPrice(d.price)}</s><span class="lls-p-sale">${formatPrice(d.salePrice)}</span>`
+          ? `<s class="lls-p-old">${formatPrice(d.price)}</s><span class="lls-p-sale">${formatPrice(d.sale_price)}</span>`
           : `<span class="lls-p-reg">${formatPrice(d.price)}</span>`;
 
         rightHtml += `
