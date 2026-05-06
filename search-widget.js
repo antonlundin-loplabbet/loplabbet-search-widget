@@ -50,10 +50,6 @@
           url:   "https://www.loplabbet.se/landningssida/loplabbets-skoguide-2025-trail",
           title: "Löplabbets skoguide 2025 – Trail & Terräng",
         },
-        {
-          url:   "https://www.loplabbet.se/produktguider/trail",
-          title: "Alla trail-skor →",
-        },
       ],
     },
     {
@@ -62,10 +58,6 @@
         {
           url:   "https://www.loplabbet.se/landningssida/loplabbets-skoguide-2026-super-trainer",
           title: "Löplabbets skoguide 2026 – Super Trainer",
-        },
-        {
-          url:   "https://www.loplabbet.se/produktguider/super-trainer",
-          title: "Alla super trainer-skor →",
         },
       ],
     },
@@ -76,10 +68,6 @@
           url:   "https://www.loplabbet.se/landningssida/loplabbets-skoguide-2026-daily-trainer",
           title: "Löplabbets skoguide 2026 – Daily Trainer",
         },
-        {
-          url:   "https://www.loplabbet.se/produktguider/daily-trainer",
-          title: "Alla daily trainer-skor →",
-        },
       ],
     },
     {
@@ -88,10 +76,6 @@
         {
           url:   "https://www.loplabbet.se/landningssida/loplabbets-skoguide-2026-race",
           title: "Löplabbets skoguide 2026 – Race",
-        },
-        {
-          url:   "https://www.loplabbet.se/produktguider/race",
-          title: "Alla race-skor →",
         },
       ],
     },
