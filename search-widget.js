@@ -80,6 +80,19 @@
       ],
     },
     {
+      keywords: ["distans", "långpass", "långa pass", "marathon", "maraton", "halvmaraton", "halvmara", "långlöpning"],
+      pages: [
+        {
+          url:   "https://www.loplabbet.se/landningssida/loplabbets-skoguide-2026-daily-trainer",
+          title: "Löplabbets skoguide 2026 – Daily Trainer",
+        },
+        {
+          url:   "https://www.loplabbet.se/landningssida/loplabbets-skoguide-2026-super-trainer",
+          title: "Löplabbets skoguide 2026 – Super Trainer",
+        },
+      ],
+    },
+    {
       keywords: ["väst", "löparväst", "löpväst", "salomon väst", "hydration", "ryggsäck"],
       pages: [
         {
