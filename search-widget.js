@@ -1,6 +1,6 @@
 /**
- * Löplabbet Search Widget v2
- * Söker parallellt i "products" och "pages" och visar båda i samma overlay.
+ * Löplabbet Search Widget v3
+ * Renare layout. Sidor sorterade efter senaste uppdatering (nyast först).
  *
  * Konfiguration:
  *   window.LOPLABBET_SEARCH_CONFIG = {
@@ -23,7 +23,7 @@
       fallbackSearchUrl: "/katalog?q=",
       debounceMs: 120,
       perPageProducts: 6,
-      perPagePages: 4,
+      perPagePages: 5,
       brandColor: "#E91E7B",
     },
     window.LOPLABBET_SEARCH_CONFIG || {}
@@ -74,7 +74,7 @@
     }
     .ll-search-section-header a:hover { text-decoration: underline; }
 
-    /* ── Sidor (kompakt) ── */
+    /* ── Sidor (kompakt, bara titel) ── */
     .ll-search-pages-list {
       list-style: none;
       margin: 0;
@@ -85,7 +85,8 @@
       padding: 8px 18px;
       cursor: pointer;
       text-decoration: none;
-      color: inherit;
+      color: #111;
+      font-size: 14px;
       transition: background .12s ease;
       border-left: 3px solid transparent;
     }
@@ -93,17 +94,6 @@
     .ll-search-page-item.is-active {
       background: #faf7f9;
       border-left-color: ${cfg.brandColor};
-    }
-    .ll-search-page-title {
-      font-size: 14px;
-      font-weight: 500;
-      color: #111;
-      line-height: 1.3;
-    }
-    .ll-search-page-meta {
-      font-size: 11px;
-      color: #999;
-      margin-top: 2px;
     }
 
     /* ── Produkter ── */
@@ -215,7 +205,7 @@
     @media (max-width: 600px) {
       .ll-search-overlay { max-height: 75vh; }
       .ll-search-thumb { width: 44px; height: 44px; }
-      .ll-search-name, .ll-search-page-title { font-size: 13px; }
+      .ll-search-name, .ll-search-page-item { font-size: 13px; }
     }
   `;
 
@@ -263,7 +253,7 @@
     overlay.style.width = rect.width + "px";
   }
 
-  // ── Typesense multi-search (parallellt) ──────────────────────────────────
+  // ── Typesense multi-search ───────────────────────────────────────────────
   async function searchBoth(query) {
     const url = `https://${cfg.typesenseHost}/multi_search`;
     const body = {
@@ -284,11 +274,13 @@
           collection: "pages",
           q: query,
           query_by: "title,description,content",
-          query_by_weights: "4,3,1",
+          query_by_weights: "5,2,1",
           prefix: "true",
           num_typos: "2",
           per_page: cfg.perPagePages,
-          include_fields: "id,title,description,url,section",
+          include_fields: "id,title,url",
+          // Sortera efter relevans, sedan nyast först (så 2026 kommer före 2025)
+          sort_by: "_text_match:desc,lastmod:desc",
         },
       ],
     };
@@ -335,18 +327,14 @@
     const items = pages.hits
       .map((hit) => {
         const p = hit.document;
-        return `
-          <a class="ll-search-page-item" href="${escape(p.url)}">
-            <div class="ll-search-page-title">${escape(p.title)}</div>
-            <div class="ll-search-page-meta">${escape(p.section)}</div>
-          </a>`;
+        return `<a class="ll-search-page-item" href="${escape(p.url)}">${escape(p.title)}</a>`;
       })
       .join("");
 
     return `
       <div class="ll-search-section">
         <div class="ll-search-section-header">
-          <span>Sidor (${pages.found})</span>
+          <span>Sidor</span>
         </div>
         <div class="ll-search-pages-list">${items}</div>
       </div>`;
@@ -387,7 +375,7 @@
     return `
       <div class="ll-search-section">
         <div class="ll-search-section-header">
-          <span>Produkter (${products.found})</span>
+          <span>Produkter</span>
           <a href="${cfg.fallbackSearchUrl}${encodeURIComponent(query)}">Visa alla →</a>
         </div>
         <div class="ll-search-products-list">${items}</div>
