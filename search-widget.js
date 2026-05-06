@@ -1,9 +1,10 @@
 /**
- * Löplabbet Search Widget v4.1
+ * Löplabbet Search Widget v4.2
  * Layout: tvåkolumn — sidor vänster, produkter höger
  * - Titlar rensade från "Köp online hos LÖPLABBET" etc.
- * - Guider: senaste + kortaste URL (huvudsidor) överst
+ * - Guider: pinnade kategorisidor + senaste överst
  * - Kläder bara vid explicit klädsökning
+ * - Bilder: referrerpolicy="no-referrer" för CDN-kompatibilitet
  */
 (function () {
   "use strict";
@@ -36,6 +37,92 @@
     { key: "Om oss",        label: "Om oss"         },
     { key: "Kundservice",   label: "Kundservice"    },
   ];
+
+  // ── Pinnade guider per sökkategori ────────────────────────────────────
+  // När söktermen matchar en nyckel visas dessa sidor ÖVERST i Guider-sektionen.
+  // Kontrollera/uppdatera URL:erna när nya skoguider publiceras.
+  // { keywords: [...], pages: [{ url, title }, ...] }
+  const PINNED_GUIDES = [
+    {
+      keywords: ["trail", "terräng", "terrangskor", "terrängskor"],
+      pages: [
+        {
+          url:   "https://www.loplabbet.se/landningssida/loplabbets-skoguide-2025-trail",
+          title: "Löplabbets skoguide 2025 – Trail & Terräng",
+        },
+        {
+          url:   "https://www.loplabbet.se/produktguider/trail",
+          title: "Alla trail-skor →",
+        },
+      ],
+    },
+    {
+      keywords: ["super trainer", "supertrainer", "super-trainer"],
+      pages: [
+        {
+          url:   "https://www.loplabbet.se/landningssida/loplabbets-skoguide-2026-super-trainer",
+          title: "Löplabbets skoguide 2026 – Super Trainer",
+        },
+        {
+          url:   "https://www.loplabbet.se/produktguider/super-trainer",
+          title: "Alla super trainer-skor →",
+        },
+      ],
+    },
+    {
+      keywords: ["daily trainer", "dailytrainer", "daily-trainer", "vardagsträning", "träningssko"],
+      pages: [
+        {
+          url:   "https://www.loplabbet.se/landningssida/loplabbets-skoguide-2026-daily-trainer",
+          title: "Löplabbets skoguide 2026 – Daily Trainer",
+        },
+        {
+          url:   "https://www.loplabbet.se/produktguider/daily-trainer",
+          title: "Alla daily trainer-skor →",
+        },
+      ],
+    },
+    {
+      keywords: ["race", "tävling", "tävlingssko", "kolfiber", "kolfibersko"],
+      pages: [
+        {
+          url:   "https://www.loplabbet.se/landningssida/loplabbets-skoguide-2026-race",
+          title: "Löplabbets skoguide 2026 – Race",
+        },
+        {
+          url:   "https://www.loplabbet.se/produktguider/race",
+          title: "Alla race-skor →",
+        },
+      ],
+    },
+    {
+      keywords: ["väst", "löparväst", "löpväst", "salomon väst", "hydration", "ryggsäck"],
+      pages: [
+        {
+          url:   "https://www.loplabbet.se/produktguider/salomon-lop-vastar",
+          title: "Salomon löpvästar – guide →",
+        },
+      ],
+    },
+    {
+      keywords: ["maurten", "näring", "gel", "fuel", "energi", "kolhydrat"],
+      pages: [
+        {
+          url:   "https://www.loplabbet.se/loplabbet-tipsar/tips/fuel-guide-maurten",
+          title: "Fuel guide – Maurten →",
+        },
+      ],
+    },
+  ];
+
+  // Returnerar pinnade sidor för söktermen, eller []
+  function getPinnedGuides(query) {
+    const q = query.toLowerCase();
+    for (const entry of PINNED_GUIDES) {
+      if (entry.keywords.some(kw => q.includes(kw))) return entry.pages;
+    }
+    return [];
+  }
 
   const MAX_PAGES_PER_SECTION = 3;
   const MAX_SECTIONS          = 3;
@@ -73,7 +160,7 @@
     catch { return 99; }
   }
 
-  function groupAndSortPages(hits) {
+  function groupAndSortPages(hits, query) {
     const map = {};
     for (const hit of hits) {
       const section = hit.document?.section || "Övrigt";
@@ -88,6 +175,18 @@
         return urlDepth(a.document?.url) - urlDepth(b.document?.url);
       });
     }
+
+    // Injicera pinnade guider överst i Produktguider-sektionen
+    const pinned = getPinnedGuides(query);
+    if (pinned.length) {
+      const pinnedHits = pinned.map(p => ({ _pinned: true, document: p }));
+      const existing = (map["Produktguider"] || []);
+      // Ta bort dubbletter (om Typesense råkar returnera samma URL)
+      const pinnedUrls = new Set(pinned.map(p => p.url));
+      const rest = existing.filter(h => !pinnedUrls.has(h.document?.url));
+      map["Produktguider"] = [...pinnedHits, ...rest];
+    }
+
     // Ordna sektioner
     const ordered = [];
     const seen = new Set();
@@ -101,6 +200,7 @@
   }
 
   function getTitle(hit) {
+    if (hit._pinned) return hit.document.title; // pinnad sida, ingen highlight
     const hl = hit.highlights?.find(h => h.field === "title");
     return cleanTitle(hl?.snippet || hit.document?.title || "");
   }
@@ -150,7 +250,7 @@
     if (!clothing) productHits = productHits.filter(h => !isClothingProduct(h));
     productHits = productHits.slice(0, MAX_PRODUCTS);
 
-    const sectionGroups = groupAndSortPages(pageResult?.hits || []);
+    const sectionGroups = groupAndSortPages(pageResult?.hits || [], query);
     const hasPages    = sectionGroups.some(g => g.hits.length > 0);
     const hasProducts = productHits.length > 0;
 
@@ -167,10 +267,11 @@
         const label = cfg?.label || group.key;
         leftHtml += `<div class="lls-col-header">${esc(label)}</div>`;
         for (const hit of group.hits.slice(0, MAX_PAGES_PER_SECTION)) {
-          const title = getTitle(hit);
-          const url   = esc(hit.document?.url || "#");
+          const title   = getTitle(hit);
+          const url     = esc(hit.document?.url || "#");
+          const isPinned = hit._pinned;
           leftHtml += `
-            <a class="lls-page-row" href="${url}">
+            <a class="lls-page-row${isPinned ? " lls-pinned" : ""}" href="${url}">
               <svg class="lls-page-icon" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
               <span>${title}</span>
             </a>`;
@@ -197,7 +298,7 @@
 
         rightHtml += `
           <a class="lls-prod-row" href="${url}">
-            <div class="lls-prod-img">${img ? `<img src="${img}" alt="" loading="lazy">` : ""}</div>
+            <div class="lls-prod-img">${img ? `<img src="${img}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ""}</div>
             <div class="lls-prod-info">
               <div class="lls-prod-brand">${esc(d.brand || "")}</div>
               <div class="lls-prod-name">${esc(d.name || "")}</div>
@@ -277,6 +378,8 @@
         transition:background .1s;
       }
       .lls-page-row:hover { background:#fafafa; }
+      .lls-pinned { font-weight:600; color:#111; }
+      .lls-pinned .lls-page-icon { stroke:${PINK}; }
       .lls-page-icon {
         flex-shrink:0; margin-top:2px; width:12px; height:12px;
         fill:none; stroke:#ccc; stroke-width:2.2;
