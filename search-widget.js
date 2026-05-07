@@ -142,7 +142,10 @@
   }
 
   // Sektioner: visningsordning + etikett
+  // "Pinnade guider" är en virtuell sektion (skapas inte av Typesense),
+  // den används för att alltid visa pinnade träffar överst.
   const SECTION_CONFIG = [
+    { key: "Pinnade guider", label: "Guider"        },
     { key: "Produktguider", label: "Guider"        },
     { key: "Tipsar",        label: "Tipsar"         },
     { key: "Landningssida", label: "Landningssidor" },
@@ -265,7 +268,6 @@
       const name = hit.document?.name || "";
       const desc = (hit.document?.description || "").slice(0, 200);
       const text = name + " " + desc;
-      // Räkna varje guide-key max 1 gång per produkt
       const matched = new Set();
       for (const { pattern, guideKey } of PRODUCT_TO_GUIDE_PATTERNS) {
         if (pattern.test(text)) matched.add(guideKey);
@@ -275,7 +277,8 @@
       }
     }
 
-    // Hitta dominant key (≥50% av topp-träffarna)
+    console.log(`[LLS] Guide-inferens räknar:`, Object.fromEntries(counts), `av ${top.length} produkter`);
+
     const threshold = Math.max(2, Math.ceil(top.length * 0.5));
     let bestKey = null, bestCount = 0;
     for (const [key, count] of counts) {
@@ -394,15 +397,19 @@
       });
     }
 
-    // Injicera pinnade guider överst — skapa Produktguider-sektionen om
-    // den inte fanns från Typesense (viktigt när "vaporfly" inte hittar
-    // någon riktig guide-sida men vi vill visa race-guiden ändå)
+    // Injicera pinnade guider i sin egen virtuella sektion överst.
+    // Detta garanterar att de ALLTID syns oavsett vad Typesense returnerar.
     if (pinned && pinned.length) {
       const pinnedHits = pinned.map(p => ({ _pinned: true, document: p }));
-      const existing = (map["Produktguider"] || []);
+      // Filtrera bort dubbletter som råkar finnas i Produktguider/Landningssida
       const pinnedUrls = new Set(pinned.map(p => p.url));
-      const rest = existing.filter(h => !pinnedUrls.has(h.document?.url));
-      map["Produktguider"] = [...pinnedHits, ...rest];
+      for (const sec of ["Produktguider", "Landningssida", "Tipsar"]) {
+        if (map[sec]) {
+          map[sec] = map[sec].filter(h => !pinnedUrls.has(h.document?.url));
+          if (map[sec].length === 0) delete map[sec];
+        }
+      }
+      map["Pinnade guider"] = pinnedHits;
     }
 
     const ordered = [];
@@ -488,6 +495,9 @@
     let pinnedGuides = getPinnedGuides(query);
     if (pinnedGuides.length === 0) {
       pinnedGuides = inferGuideFromProducts(productHitsForInference);
+      if (pinnedGuides.length) {
+        console.log(`[LLS] Guide-inferens från produkter:`, pinnedGuides.map(p => p.title));
+      }
     }
 
     const sectionGroups = groupAndSortPages(pageResult?.hits || [], pinnedGuides);
