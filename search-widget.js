@@ -1,11 +1,9 @@
 /**
- * Löplabbet Search Widget v4.4
- * - Tvåkolumn: sidor vänster, produkter höger
- * - Pinnade kategoriguider överst (trail, race, daily, super, väst, maurten)
- * - Klädesfilter (visas bara vid explicit klädsökning)
- * - Märkesigenkänning: "hoka tävling" → filtrerar produkter på Hoka
- * - Färgdedup: samma sko i många färger visas som 1 Herr + 1 Dam-variant
- * - Tekniska specs på produktrader (drop, dämpning, vidd)
+ * Löplabbet Search Widget v4.5
+ * - Flexibel märkesmatchning: "hoka" matchar "Hoka One One"
+ * - Varumärken-sektion överst i sidor när märke detekteras
+ * - Tekniska specs på produktrader
+ * - Färgdedup (1 Herr + 1 Dam per modell)
  */
 (function () {
   "use strict";
@@ -27,26 +25,73 @@
     "buff","long sleeve","langärm","skjorta"
   ];
 
-  // Kända varumärken — om något av dessa hittas i söktermen filtreras
-  // produktsöket på det märket. Sortering: längst först (så "new balance"
-  // matchar före "new").
-  const KNOWN_BRANDS = [
-    "new balance","la sportiva","under armour","la chaussure",
-    "hoka","nike","asics","saucony","brooks","adidas","puma","salomon",
-    "merrell","topo","altra","mizuno","norda","scott","craft","mavic",
-    "garmin","coros","polar","suunto","maurten","hilly","injinji",
-    "vj","361"
-  ];
-  const BRANDS_SORTED = [...KNOWN_BRANDS].sort((a, b) => b.length - a.length);
+  // Varumärken hämtas från Typesense vid widgetstart — undviker att
+  // hårdkoda alla varianter ("Hoka" vs "Hoka One One" vs "HOKA").
+  // [{name, slug, count}, ...]
+  let BRAND_INDEX = [];
 
+  async function loadBrands() {
+    try {
+      const url = `https://${HOST}/collections/products/documents/search` +
+        `?q=*&query_by=name&facet_by=brand&per_page=0&max_facet_values=200` +
+        `&x-typesense-api-key=${API_KEY}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      const counts = data.facet_counts?.[0]?.counts || [];
+      BRAND_INDEX = counts
+        .filter(c => c.value && c.value.trim())
+        .map(c => ({
+          name:  c.value,
+          slug:  c.value.toLowerCase().trim().replace(/\s+/g, "-"),
+          count: c.count,
+        }));
+      console.log(`[LLS] ${BRAND_INDEX.length} varumärken laddade.`);
+    } catch (e) {
+      console.warn("[LLS] Kunde inte ladda varumärken:", e);
+    }
+  }
+
+  function escapeRegex(s) {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  // Matchar söktermen mot ett verkligt varumärke. Längsta match först.
+  // "hoka" i söktermen matchar "Hoka One One" via första-ord-fallback.
   function detectBrand(query) {
     const q = query.toLowerCase();
-    for (const brand of BRANDS_SORTED) {
-      // Hela ordmatch — undvik att "on" matchar mitt i ord
-      const re = new RegExp(`\\b${brand.replace(/\s+/g, "\\s+")}\\b`, "i");
-      if (re.test(q)) return brand;
+    const sorted = [...BRAND_INDEX].sort(
+      (a, b) => b.name.length - a.name.length
+    );
+    for (const brand of sorted) {
+      const lname = brand.name.toLowerCase();
+      const firstWord = lname.split(/\s+/)[0];
+      const reFull  = new RegExp(`\\b${escapeRegex(lname)}\\b`, "i");
+      const reFirst = new RegExp(`\\b${escapeRegex(firstWord)}\\b`, "i");
+      if (reFull.test(q) || reFirst.test(q)) return brand;
     }
     return null;
+  }
+
+  // Hittar alla märken vars namn innehåller söktermen — för Varumärken-sektion.
+  function findMatchingBrands(query) {
+    const q = query.toLowerCase().trim();
+    if (q.length < 2) return [];
+    return BRAND_INDEX
+      .filter(b => b.name.toLowerCase().includes(q))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 3);
+  }
+
+  // Tar bort matchat märkesnamn från söktermen.
+  // "hoka bondi" + brand="Hoka One One" → "bondi"
+  function stripBrandFromQuery(query, brand) {
+    if (!brand) return query;
+    const lname = brand.name.toLowerCase();
+    const firstWord = lname.split(/\s+/)[0];
+    let q = query;
+    q = q.replace(new RegExp(`\\b${escapeRegex(lname)}\\b`, "ig"), "");
+    q = q.replace(new RegExp(`\\b${escapeRegex(firstWord)}\\b`, "ig"), "");
+    return q.trim();
   }
 
   // Sektioner: visningsordning + etikett
@@ -291,20 +336,22 @@
   // ── Typesense multi_search ─────────────────────────────────────────────
   async function search(query) {
     const brand = detectBrand(query);
+    const stripped = stripBrandFromQuery(query, brand);
+    // Om bara märket angetts ("hoka") utan resterande sökord → match-allt
+    const productQuery = stripped || (brand ? "*" : query);
+
     const productSearch = {
       collection: "products",
-      q: query,
-      query_by: "name,brand,description,category,subcategory",
+      q: productQuery,
+      query_by:         "name,brand,description,category,subcategory",
+      query_by_weights: "5,8,1,3,3",
       num_typos: 2,
-      per_page: 40, // hämta extra → tillräckligt efter dedup
-      sort_by: "_text_match:desc"
+      per_page: 40,
+      sort_by: "_text_match:desc",
+      prioritize_exact_match: true
     };
     if (brand) {
-      // Filtrera till bara det märket. Brand-fältet i Typesense har
-      // korrekt skiftläge ("Hoka", "New Balance") så vi behöver matcha det.
-      const cap = brand.split(" ")
-        .map(w => w[0].toUpperCase() + w.slice(1)).join(" ");
-      productSearch.filter_by = `brand:=[\`${cap}\`]`;
+      productSearch.filter_by = `brand:=[\`${brand.name}\`]`;
     }
     const body = {
       searches: [
@@ -336,16 +383,33 @@
     productHits = productHits.slice(0, MAX_PRODUCTS);
 
     const sectionGroups = groupAndSortPages(pageResult?.hits || [], query);
+    const matchedBrands = findMatchingBrands(query);
+    const hasBrands   = matchedBrands.length > 0;
     const hasPages    = sectionGroups.some(g => g.hits.length > 0);
     const hasProducts = productHits.length > 0;
+    const hasLeft     = hasBrands || hasPages;
 
-    if (!hasPages && !hasProducts) {
+    if (!hasLeft && !hasProducts) {
       container.innerHTML = `<div class="lls-empty">Inga resultat för "<strong>${esc(query)}</strong>"</div>`;
       return;
     }
 
-    // ── Vänster: sidor ─────────────────────────────────────────────────
+    // ── Vänster: varumärken + sidor ────────────────────────────────────
     let leftHtml = "";
+
+    // Varumärken — visas högst upp om söktermen matchar något märke
+    if (hasBrands) {
+      leftHtml += `<div class="lls-col-header">Varumärken</div>`;
+      for (const b of matchedBrands) {
+        const brandUrl = `https://www.loplabbet.se/${b.slug}`;
+        leftHtml += `
+          <a class="lls-page-row lls-brand-row" href="${esc(brandUrl)}">
+            <svg class="lls-page-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>
+            <span>${esc(b.name)} <span class="lls-brand-count">(${b.count})</span></span>
+          </a>`;
+      }
+    }
+
     if (hasPages) {
       for (const group of sectionGroups) {
         const cfg = SECTION_CONFIG.find(s => s.key === group.key);
@@ -402,14 +466,14 @@
       </div>`;
 
     // ── Montera grid ───────────────────────────────────────────────────
-    if (hasPages && hasProducts) {
+    if (hasLeft && hasProducts) {
       container.innerHTML = `
         <div class="lls-grid">
           <div class="lls-col-left">${leftHtml}</div>
           <div class="lls-col-right">${rightHtml}</div>
           ${footer}
         </div>`;
-    } else if (hasPages) {
+    } else if (hasLeft) {
       container.innerHTML = `<div class="lls-single">${leftHtml}${footer}</div>`;
     } else {
       container.innerHTML = `<div class="lls-single">${rightHtml}${footer}</div>`;
@@ -467,6 +531,9 @@
       .lls-page-row:hover { background:#fafafa; }
       .lls-pinned { font-weight:600; color:#111; }
       .lls-pinned .lls-page-icon { stroke:${PINK}; }
+      .lls-brand-row { font-weight:600; }
+      .lls-brand-row .lls-page-icon { fill:${PINK}; stroke:none; }
+      .lls-brand-count { color:#aaa; font-weight:400; font-size:11px; margin-left:4px; }
       .lls-page-icon {
         flex-shrink:0; margin-top:2px; width:12px; height:12px;
         fill:none; stroke:#ccc; stroke-width:2.2;
@@ -549,6 +616,10 @@
     const input = findSearchInput();
     if (!input) { console.warn("[LLS] Hittade inget sökfält."); return; }
 
+    // Ladda varumärken i bakgrunden — söket fungerar även om det dröjer,
+    // varumärkesfiltret aktiveras så fort listan är klar.
+    loadBrands();
+
     const dd = createDropdown(input);
     let timer, lastQuery = "", reqId = 0;
 
@@ -566,7 +637,7 @@
         try {
           const data = await search(query);
           if (id !== reqId) return;
-          const searchUrl = `https://www.loplabbet.se/search?q=${encodeURIComponent(query)}`;
+          const searchUrl = `https://www.loplabbet.se/katalog?q=${encodeURIComponent(query)}`;
           renderDropdown(dd, query, data, searchUrl);
           positionDropdown(dd, input);
           dd.style.display = "block";
@@ -584,7 +655,7 @@
       if (dd.style.display !== "none") positionDropdown(dd, input);
     });
 
-    console.log("[LLS] Search widget v4.1 redo.");
+    console.log("[LLS] Search widget v4.5 redo.");
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
