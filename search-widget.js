@@ -157,8 +157,19 @@
   // När söktermen matchar en nyckel visas dessa sidor ÖVERST i Guider-sektionen.
   // Kontrollera/uppdatera URL:erna när nya skoguider publiceras.
   // { keywords: [...], pages: [{ url, title }, ...] }
+  // OBS: "key"-fältet används av produktnamn-inferens nedan.
+
+  // Mappar produktnamn-mönster till en guide-key.
+  // Söker användaren "vaporfly" → träffarna har "KOLFIBERSKOR" → key="race"
+  // → race-guiden föreslås automatiskt.
+  const PRODUCT_TO_GUIDE_PATTERNS = [
+    { pattern: /kolfiber/i,   guideKey: "race"  },
+    { pattern: /terräng/i,    guideKey: "trail" },
+    { pattern: /\btrail\b/i,  guideKey: "trail" },
+  ];
   const PINNED_GUIDES = [
     {
+      key: "trail",
       keywords: ["trail", "terräng", "terrangskor", "terrängskor"],
       pages: [
         {
@@ -168,6 +179,7 @@
       ],
     },
     {
+      key: "super-trainer",
       keywords: ["super trainer", "supertrainer", "super-trainer"],
       pages: [
         {
@@ -177,6 +189,7 @@
       ],
     },
     {
+      key: "daily-trainer",
       keywords: ["daily trainer", "dailytrainer", "daily-trainer", "vardagsträning", "träningssko"],
       pages: [
         {
@@ -186,6 +199,7 @@
       ],
     },
     {
+      key: "race",
       keywords: ["race", "tävling", "tävlingssko", "kolfiber", "kolfibersko"],
       pages: [
         {
@@ -195,6 +209,7 @@
       ],
     },
     {
+      key: "distans",
       keywords: ["distans", "långpass", "långa pass", "marathon", "maraton", "halvmaraton", "halvmara", "långlöpning"],
       pages: [
         {
@@ -208,6 +223,7 @@
       ],
     },
     {
+      key: "vast",
       keywords: ["väst", "löparväst", "löpväst", "salomon väst", "hydration", "ryggsäck"],
       pages: [
         {
@@ -217,6 +233,7 @@
       ],
     },
     {
+      key: "maurten",
       keywords: ["maurten", "näring", "gel", "fuel", "energi", "kolhydrat"],
       pages: [
         {
@@ -234,6 +251,42 @@
       if (entry.keywords.some(kw => q.includes(kw))) return entry.pages;
     }
     return [];
+  }
+
+  // Härled guide från produkternas namn + beskrivning.
+  // Söker användaren "vaporfly" → 100% av träffarna har "KOLFIBERSKOR" i namn
+  // → race-guiden föreslås.
+  function inferGuideFromProducts(productHits) {
+    if (productHits.length < MIN_HITS_FOR_INFERENCE) return [];
+    const top = productHits.slice(0, 10);
+    const counts = new Map();
+
+    for (const hit of top) {
+      const name = hit.document?.name || "";
+      const desc = (hit.document?.description || "").slice(0, 200);
+      const text = name + " " + desc;
+      // Räkna varje guide-key max 1 gång per produkt
+      const matched = new Set();
+      for (const { pattern, guideKey } of PRODUCT_TO_GUIDE_PATTERNS) {
+        if (pattern.test(text)) matched.add(guideKey);
+      }
+      for (const key of matched) {
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+    }
+
+    // Hitta dominant key (≥50% av topp-träffarna)
+    const threshold = Math.max(2, Math.ceil(top.length * 0.5));
+    let bestKey = null, bestCount = 0;
+    for (const [key, count] of counts) {
+      if (count >= threshold && count > bestCount) {
+        bestKey = key; bestCount = count;
+      }
+    }
+    if (!bestKey) return [];
+
+    const guide = PINNED_GUIDES.find(g => g.key === bestKey);
+    return guide ? guide.pages : [];
   }
 
   const MAX_PAGES_PER_SECTION = 3;
@@ -325,7 +378,7 @@
     catch { return 99; }
   }
 
-  function groupAndSortPages(hits, query) {
+  function groupAndSortPages(hits, pinned) {
     const map = {};
     for (const hit of hits) {
       const section = hit.document?.section || "Övrigt";
@@ -341,18 +394,17 @@
       });
     }
 
-    // Injicera pinnade guider överst i Produktguider-sektionen
-    const pinned = getPinnedGuides(query);
-    if (pinned.length) {
+    // Injicera pinnade guider överst — skapa Produktguider-sektionen om
+    // den inte fanns från Typesense (viktigt när "vaporfly" inte hittar
+    // någon riktig guide-sida men vi vill visa race-guiden ändå)
+    if (pinned && pinned.length) {
       const pinnedHits = pinned.map(p => ({ _pinned: true, document: p }));
       const existing = (map["Produktguider"] || []);
-      // Ta bort dubbletter (om Typesense råkar returnera samma URL)
       const pinnedUrls = new Set(pinned.map(p => p.url));
       const rest = existing.filter(h => !pinnedUrls.has(h.document?.url));
       map["Produktguider"] = [...pinnedHits, ...rest];
     }
 
-    // Ordna sektioner
     const ordered = [];
     const seen = new Set();
     for (const { key } of SECTION_CONFIG) {
@@ -432,7 +484,13 @@
     productHits = dedupeByModel(productHits);
     productHits = productHits.slice(0, MAX_PRODUCTS);
 
-    const sectionGroups = groupAndSortPages(pageResult?.hits || [], query);
+    // Pinnade guider: först explicit query-match, sedan inferens från produkter
+    let pinnedGuides = getPinnedGuides(query);
+    if (pinnedGuides.length === 0) {
+      pinnedGuides = inferGuideFromProducts(productHitsForInference);
+    }
+
+    const sectionGroups = groupAndSortPages(pageResult?.hits || [], pinnedGuides);
     let matchedBrands = findMatchingBrands(query);
     // Fallback: härled märke från produkterna ("endorphin" → Saucony)
     if (matchedBrands.length === 0) {
