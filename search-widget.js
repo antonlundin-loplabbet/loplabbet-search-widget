@@ -1,9 +1,10 @@
 /**
- * Löplabbet Search Widget v4.5
- * - Flexibel märkesmatchning: "hoka" matchar "Hoka One One"
- * - Varumärken-sektion överst i sidor när märke detekteras
- * - Tekniska specs på produktrader
- * - Färgdedup (1 Herr + 1 Dam per modell)
+ * Löplabbet Search Widget v4.6
+ * - Smart-Enter: prioriterar märkessida → guide → toppträff → katalogsök
+ * - Tangentbordsnavigation: Pil upp/ner, Enter, Esc
+ * - Egen "Pinnade guider"-sektion
+ * - Brand- och guide-inferens från produktresultat
+ * - Tvåkolumnslayout med sektioner och tekniska specs
  */
 (function () {
   "use strict";
@@ -582,9 +583,11 @@
     }
 
     // ── Footer ─────────────────────────────────────────────────────────
+    const totalProducts = prodResult?.found || 0;
+    const countLabel = totalProducts > 0 ? ` (${totalProducts.toLocaleString("sv-SE")})` : "";
     const footer = `
       <div class="lls-footer" ${hasPages && hasProducts ? 'style="grid-column:1/-1"' : ""}>
-        <a href="${esc(searchUrl)}">Visa alla resultat för "<strong>${esc(query)}</strong>" →</a>
+        <a href="${esc(searchUrl)}">Visa alla resultat${countLabel} för "<strong>${esc(query)}</strong>" →</a>
       </div>`;
 
     // ── Montera grid ───────────────────────────────────────────────────
@@ -650,7 +653,9 @@
         font-size:13px; line-height:1.35;
         transition:background .1s;
       }
-      .lls-page-row:hover { background:#fafafa; }
+      .lls-page-row:hover, .lls-page-row.lls-active { background:#fafafa; }
+      .lls-prod-row:hover, .lls-prod-row.lls-active { background:#fafafa; }
+      .lls-active { box-shadow: inset 3px 0 0 ${PINK}; }
       .lls-pinned { font-weight:600; color:#111; }
       .lls-pinned .lls-page-icon { stroke:${PINK}; }
       .lls-brand-row { font-weight:600; }
@@ -667,7 +672,6 @@
         padding:9px 14px; color:#222; text-decoration:none;
         transition:background .1s;
       }
-      .lls-prod-row:hover { background:#fafafa; }
       .lls-prod-img {
         width:50px; height:50px; flex-shrink:0;
         border-radius:5px; background:#f6f6f6;
@@ -694,6 +698,57 @@
       .lls-empty { padding:20px 16px; color:#888; font-size:14px; }
     `;
     document.head.appendChild(s);
+  }
+
+  // ── Smart-Enter: avgör vart Enter ska ta användaren ────────────────────
+  // Prioritetsordning:
+  // 1. Markerad träff i dropdown (pil-navigerad)
+  // 2. Pinnad guide om sådan finns (race-guiden för "vaporfly")
+  // 3. Märkessida om söktermen är ett rent märke ("hoka")
+  // 4. Toppträffen om den är dominerande (≥2x score än 2:an)
+  // 5. Fallback: sökresultatsidan /katalog?q=...
+  function resolveEnterDestination(state) {
+    const { query, productHits, pinnedGuides, matchedBrands, fallbackUrl } = state;
+
+    // 2. Pinnad guide (hög konfidens — vi har redan inferens)
+    if (pinnedGuides && pinnedGuides.length === 1) {
+      return { url: pinnedGuides[0].url, reason: "pinnad guide" };
+    }
+
+    // 3. Söktermen är BARA ett märke (utan modellnamn efter)
+    if (matchedBrands.length === 1) {
+      const brand = matchedBrands[0];
+      const stripped = stripBrandFromQuery(query, brand);
+      if (!stripped || stripped.length < 2) {
+        return {
+          url: `https://www.loplabbet.se/${brand.slug}`,
+          reason: "märkessida"
+        };
+      }
+    }
+
+    // 4. Toppträff dominerar (sällsynt — kräver att 1:an är >= 2x bättre än 2:an)
+    if (productHits.length >= 2) {
+      const top = productHits[0];
+      const second = productHits[1];
+      const topScore = Number(top?.text_match || 0);
+      const secondScore = Number(second?.text_match || 0);
+      if (topScore > 0 && topScore >= secondScore * 2) {
+        return {
+          url: top.document?.product_url || fallbackUrl,
+          reason: "dominerande toppträff"
+        };
+      }
+    } else if (productHits.length === 1) {
+      // Bara en träff totalt → gå direkt dit
+      return {
+        url: productHits[0].document?.product_url || fallbackUrl,
+        reason: "enda produktträffen"
+      };
+    }
+
+    // 5. Fallback
+    return { url: fallbackUrl, reason: "katalogsök" };
   }
 
   // ── Hitta sökfält ──────────────────────────────────────────────────────
@@ -732,25 +787,71 @@
     dd.style.width = Math.max(ir.width, 680) + "px";
   }
 
+  // ── Tangentbordsnavigation: hitta alla länkar i dropdown och markera ──
+  function getNavigableItems(dd) {
+    return Array.from(dd.querySelectorAll("a.lls-page-row, a.lls-prod-row"));
+  }
+
+  function setActiveItem(dd, items, index) {
+    items.forEach((el, i) => el.classList.toggle("lls-active", i === index));
+    if (index >= 0 && items[index]) {
+      items[index].scrollIntoView({ block: "nearest" });
+    }
+  }
+
   // ── Init ───────────────────────────────────────────────────────────────
   function init() {
     injectStyles();
     const input = findSearchInput();
     if (!input) { console.warn("[LLS] Hittade inget sökfält."); return; }
 
-    // Ladda varumärken i bakgrunden — söket fungerar även om det dröjer,
-    // varumärkesfiltret aktiveras så fort listan är klar.
+    // Ladda varumärken i bakgrunden
     loadBrands();
 
     const dd = createDropdown(input);
     let timer, lastQuery = "", reqId = 0;
+    // State som behövs för Smart-Enter:
+    let lastEnterState = null;
+    // Tangentbords-index: -1 = inget markerat, 0+ = markerad rad
+    let activeIndex = -1;
 
-    function close() { dd.style.display = "none"; }
+    // Förhindra default form-submit om sökfältet sitter i ett <form>
+    const form = input.closest("form");
+    if (form) {
+      form.addEventListener("submit", e => {
+        if (lastEnterState) {
+          e.preventDefault();
+          handleEnter();
+        }
+      });
+    }
+
+    function close() {
+      dd.style.display = "none";
+      activeIndex = -1;
+    }
+
+    function handleEnter() {
+      const items = getNavigableItems(dd);
+
+      // 1. Användaren har pil-navigerat → öppna markerad träff
+      if (activeIndex >= 0 && items[activeIndex]) {
+        const url = items[activeIndex].getAttribute("href");
+        if (url && url !== "#") { window.location.href = url; return; }
+      }
+
+      // 2-5. Smart-Enter
+      if (lastEnterState) {
+        const dest = resolveEnterDestination(lastEnterState);
+        console.log(`[LLS] Smart-Enter → ${dest.reason}: ${dest.url}`);
+        window.location.href = dest.url;
+      }
+    }
 
     input.addEventListener("input", () => {
       clearTimeout(timer);
       const query = input.value.trim();
-      if (query.length < MIN_QUERY_LENGTH) { close(); return; }
+      if (query.length < MIN_QUERY_LENGTH) { close(); lastEnterState = null; return; }
       if (query === lastQuery) return;
 
       timer = setTimeout(async () => {
@@ -763,6 +864,30 @@
           renderDropdown(dd, query, data, searchUrl);
           positionDropdown(dd, input);
           dd.style.display = "block";
+          activeIndex = -1;
+
+          // Bygg state för Smart-Enter
+          const [prodResult] = data.results;
+          let productHits = (prodResult?.hits || []);
+          if (!isClothingSearch(query)) {
+            productHits = productHits.filter(h => !isClothingProduct(h));
+          }
+          const productHitsForInference = productHits;
+          let pinnedGuides = getPinnedGuides(query);
+          if (pinnedGuides.length === 0) {
+            pinnedGuides = inferGuideFromProducts(productHitsForInference);
+          }
+          let matchedBrands = findMatchingBrands(query);
+          if (matchedBrands.length === 0) {
+            matchedBrands = inferBrandsFromProducts(productHitsForInference);
+          }
+          lastEnterState = {
+            query,
+            productHits: dedupeByModel(productHits),
+            pinnedGuides,
+            matchedBrands,
+            fallbackUrl: searchUrl,
+          };
         } catch (e) { console.error("[LLS]", e); }
       }, DEBOUNCE_MS);
     });
@@ -770,14 +895,41 @@
     document.addEventListener("click", e => {
       if (!dd.contains(e.target) && e.target !== input) close();
     });
+
     input.addEventListener("keydown", e => {
-      if (e.key === "Escape") { close(); input.blur(); }
+      if (e.key === "Escape") { close(); input.blur(); return; }
+
+      const isOpen = dd.style.display === "block";
+      if (!isOpen) {
+        // Ingen dropdown öppen — Enter går till sökresultat
+        if (e.key === "Enter" && lastEnterState) {
+          e.preventDefault();
+          handleEnter();
+        }
+        return;
+      }
+
+      const items = getNavigableItems(dd);
+
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        activeIndex = Math.min(activeIndex + 1, items.length - 1);
+        setActiveItem(dd, items, activeIndex);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        activeIndex = Math.max(activeIndex - 1, -1);
+        setActiveItem(dd, items, activeIndex);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        handleEnter();
+      }
     });
+
     window.addEventListener("resize", () => {
       if (dd.style.display !== "none") positionDropdown(dd, input);
     });
 
-    console.log("[LLS] Search widget v4.5 redo.");
+    console.log("[LLS] Search widget v4.6 redo.");
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
