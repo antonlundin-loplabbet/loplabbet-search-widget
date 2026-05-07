@@ -72,14 +72,61 @@
     return null;
   }
 
-  // Hittar alla märken vars namn innehåller söktermen — för Varumärken-sektion.
+  // Hittar varumärken att visa i Varumärken-sektionen.
+  // 1. Om söktermen innehåller ett komplett varumärke — visa det märket.
+  // 2. Annars: prefix-match medan användaren skriver ("hok" → Hoka One One).
+  // 3. Annars: härled märke från produktresultatens dominans
+  //    ("endorphin" → träffar dominerade av Saucony → föreslå Saucony).
+  //    Detta lager kallas separat efter att produkter hämtats.
   function findMatchingBrands(query) {
     const q = query.toLowerCase().trim();
     if (q.length < 2) return [];
+
+    const detected = detectBrand(query);
+    if (detected) return [detected];
+
+    if (q.length < 3) return [];
     return BRAND_INDEX
-      .filter(b => b.name.toLowerCase().includes(q))
+      .filter(b => {
+        const lname = b.name.toLowerCase();
+        const firstWord = lname.split(/\s+/)[0];
+        return lname.startsWith(q) || firstWord.startsWith(q);
+      })
       .sort((a, b) => b.count - a.count)
       .slice(0, 3);
+  }
+
+  // Härled varumärke från produktresultaten — om ett märke står för
+  // minst MIN_DOMINANCE av träffarna, föreslå det.
+  // Tröskelvärdet är högt så vi bara föreslår när det är tydligt
+  // ("endorphin" → 95% Saucony) och inte när träffarna är blandade.
+  const MIN_DOMINANCE = 0.6; // 60% av topp-träffarna ska vara samma märke
+  const MIN_HITS_FOR_INFERENCE = 3;
+
+  function inferBrandsFromProducts(productHits) {
+    if (productHits.length < MIN_HITS_FOR_INFERENCE) return [];
+    // Räkna bara de översta resultaten (mest relevanta)
+    const top = productHits.slice(0, 10);
+    const counts = new Map();
+    for (const hit of top) {
+      const brand = hit.document?.brand;
+      if (!brand) continue;
+      counts.set(brand, (counts.get(brand) || 0) + 1);
+    }
+    const ranked = [...counts.entries()]
+      .map(([name, count]) => ({ name, count, ratio: count / top.length }))
+      .filter(b => b.ratio >= MIN_DOMINANCE)
+      .sort((a, b) => b.count - a.count);
+
+    // Berika med slug + total count från BRAND_INDEX
+    return ranked.map(b => {
+      const indexed = BRAND_INDEX.find(x => x.name === b.name);
+      return indexed || {
+        name: b.name,
+        slug: b.name.toLowerCase().replace(/\s+/g, "-"),
+        count: b.count,
+      };
+    });
   }
 
   // Tar bort matchat märkesnamn från söktermen.
@@ -377,13 +424,20 @@
     const [prodResult, pageResult] = results.results;
     const clothing = isClothingSearch(query);
 
+    // Använd ALLA råa produktträffar (innan dedup/slicing) för märkesinferens
+    // — så vi kan se märkesdominansen tydligt även om vi sen bara visar 8.
     let productHits = (prodResult?.hits || []);
     if (!clothing) productHits = productHits.filter(h => !isClothingProduct(h));
-    productHits = dedupeByModel(productHits);          // ← färgdedup
+    const productHitsForInference = productHits;
+    productHits = dedupeByModel(productHits);
     productHits = productHits.slice(0, MAX_PRODUCTS);
 
     const sectionGroups = groupAndSortPages(pageResult?.hits || [], query);
-    const matchedBrands = findMatchingBrands(query);
+    let matchedBrands = findMatchingBrands(query);
+    // Fallback: härled märke från produkterna ("endorphin" → Saucony)
+    if (matchedBrands.length === 0) {
+      matchedBrands = inferBrandsFromProducts(productHitsForInference);
+    }
     const hasBrands   = matchedBrands.length > 0;
     const hasPages    = sectionGroups.some(g => g.hits.length > 0);
     const hasProducts = productHits.length > 0;
