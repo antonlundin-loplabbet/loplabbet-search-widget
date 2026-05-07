@@ -218,7 +218,7 @@
       searches: [
         {
           collection: "products",
-          q: query, query_by: "name,brand",
+          q: query, query_by: "name,brand,description,category,subcategory",
           num_typos: 2, per_page: 20,
           sort_by: "_text_match:desc"
         },
