@@ -1,10 +1,11 @@
 /**
- * Löplabbet Search Widget v4.2
- * Layout: tvåkolumn — sidor vänster, produkter höger
- * - Titlar rensade från "Köp online hos LÖPLABBET" etc.
- * - Guider: pinnade kategorisidor + senaste överst
- * - Kläder bara vid explicit klädsökning
- * - Bilder: referrerpolicy="no-referrer" för CDN-kompatibilitet
+ * Löplabbet Search Widget v4.4
+ * - Tvåkolumn: sidor vänster, produkter höger
+ * - Pinnade kategoriguider överst (trail, race, daily, super, väst, maurten)
+ * - Klädesfilter (visas bara vid explicit klädsökning)
+ * - Märkesigenkänning: "hoka tävling" → filtrerar produkter på Hoka
+ * - Färgdedup: samma sko i många färger visas som 1 Herr + 1 Dam-variant
+ * - Tekniska specs på produktrader (drop, dämpning, vidd)
  */
 (function () {
   "use strict";
@@ -25,6 +26,28 @@
     "löparkjol","löpartights","löparshorts","byxa","väst","mössa","handskar",
     "buff","long sleeve","langärm","skjorta"
   ];
+
+  // Kända varumärken — om något av dessa hittas i söktermen filtreras
+  // produktsöket på det märket. Sortering: längst först (så "new balance"
+  // matchar före "new").
+  const KNOWN_BRANDS = [
+    "new balance","la sportiva","under armour","la chaussure",
+    "hoka","nike","asics","saucony","brooks","adidas","puma","salomon",
+    "merrell","topo","altra","mizuno","norda","scott","craft","mavic",
+    "garmin","coros","polar","suunto","maurten","hilly","injinji",
+    "vj","361"
+  ];
+  const BRANDS_SORTED = [...KNOWN_BRANDS].sort((a, b) => b.length - a.length);
+
+  function detectBrand(query) {
+    const q = query.toLowerCase();
+    for (const brand of BRANDS_SORTED) {
+      // Hela ordmatch — undvik att "on" matchar mitt i ord
+      const re = new RegExp(`\\b${brand.replace(/\s+/g, "\\s+")}\\b`, "i");
+      if (re.test(q)) return brand;
+    }
+    return null;
+  }
 
   // Sektioner: visningsordning + etikett
   const SECTION_CONFIG = [
@@ -151,6 +174,59 @@
     return CLOTHING_PRODUCT_KW.some(kw => name.includes(kw));
   }
 
+  // ── Färgdedup ──────────────────────────────────────────────────────────
+  // Samma sko i många färger blir ett resultat (1 Herr + 1 Dam-variant).
+  // Modell-ID extraheras från product_url: /product/1610804/01 → "1610804"
+  function getModelId(hit) {
+    const url = hit.document?.product_url || "";
+    const m = url.match(/\/product\/([^/?]+)/);
+    return m ? m[1] : url; // fallback: hela URL:en
+  }
+
+  function dedupeByModel(hits) {
+    const groups = new Map(); // modelId → { herr, dam, other }
+    const order = [];
+
+    for (const hit of hits) {
+      const id = getModelId(hit);
+      const gender = (hit.document?.gender || "").toLowerCase();
+      if (!groups.has(id)) { groups.set(id, {}); order.push(id); }
+      const slot = groups.get(id);
+
+      if (gender === "herr" && !slot.herr) slot.herr = hit;
+      else if (gender === "dam" && !slot.dam) slot.dam = hit;
+      else if (!slot.other) slot.other = hit;
+    }
+
+    const result = [];
+    for (const id of order) {
+      const slot = groups.get(id);
+      if (slot.herr) result.push(slot.herr);
+      if (slot.dam) result.push(slot.dam);
+      if (!slot.herr && !slot.dam && slot.other) result.push(slot.other);
+    }
+    return result;
+  }
+
+  // ── Teknisk spec-rad ───────────────────────────────────────────────────
+  // Bygger "Drop 8 mm · Medel dämpning · Normal vidd" från valda fält.
+  function buildSpecLine(d) {
+    const parts = [];
+    if (d.drop != null && d.drop !== "") {
+      parts.push(`Drop ${d.drop}\u00a0mm`);
+    }
+    if (d.cushioning) {
+      parts.push(`${d.cushioning}\u00a0dämpning`);
+    }
+    if (d.last_width) {
+      parts.push(`${d.last_width}\u00a0vidd`);
+    }
+    if (d.weight_grams) {
+      parts.push(`${d.weight_grams}\u00a0g`);
+    }
+    return parts.join(" · ");
+  }
+
   // Antal "/" i path = djup (lägre = föräldrasida = föredras)
   function urlDepth(url) {
     try { return (new URL(url).pathname.match(/\//g) || []).length; }
@@ -214,14 +290,25 @@
 
   // ── Typesense multi_search ─────────────────────────────────────────────
   async function search(query) {
+    const brand = detectBrand(query);
+    const productSearch = {
+      collection: "products",
+      q: query,
+      query_by: "name,brand,description,category,subcategory",
+      num_typos: 2,
+      per_page: 40, // hämta extra → tillräckligt efter dedup
+      sort_by: "_text_match:desc"
+    };
+    if (brand) {
+      // Filtrera till bara det märket. Brand-fältet i Typesense har
+      // korrekt skiftläge ("Hoka", "New Balance") så vi behöver matcha det.
+      const cap = brand.split(" ")
+        .map(w => w[0].toUpperCase() + w.slice(1)).join(" ");
+      productSearch.filter_by = `brand:=[\`${cap}\`]`;
+    }
     const body = {
       searches: [
-        {
-          collection: "products",
-          q: query, query_by: "name,brand,description,category,subcategory",
-          num_typos: 2, per_page: 20,
-          sort_by: "_text_match:desc"
-        },
+        productSearch,
         {
           collection: "pages",
           q: query, query_by: "title,description,content",
@@ -245,6 +332,7 @@
 
     let productHits = (prodResult?.hits || []);
     if (!clothing) productHits = productHits.filter(h => !isClothingProduct(h));
+    productHits = dedupeByModel(productHits);          // ← färgdedup
     productHits = productHits.slice(0, MAX_PRODUCTS);
 
     const sectionGroups = groupAndSortPages(pageResult?.hits || [], query);
@@ -292,6 +380,7 @@
         const priceHtml = hasDisc
           ? `<s class="lls-p-old">${formatPrice(d.price)}</s><span class="lls-p-sale">${formatPrice(d.sale_price)}</span>`
           : `<span class="lls-p-reg">${formatPrice(d.price)}</span>`;
+        const specs = buildSpecLine(d);
 
         rightHtml += `
           <a class="lls-prod-row" href="${url}">
@@ -299,6 +388,7 @@
             <div class="lls-prod-info">
               <div class="lls-prod-brand">${esc(d.brand || "")}</div>
               <div class="lls-prod-name">${esc(d.name || "")}</div>
+              ${specs ? `<div class="lls-prod-specs">${esc(specs)}</div>` : ""}
             </div>
             <div class="lls-prod-price">${priceHtml}</div>
           </a>`;
@@ -398,6 +488,8 @@
       .lls-prod-info  { flex:1; min-width:0; }
       .lls-prod-brand { font-size:10px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:#999; }
       .lls-prod-name  { font-size:12.5px; line-height:1.3; color:#111;
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .lls-prod-specs { font-size:10.5px; color:#888; margin-top:2px;
         white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .lls-prod-price { flex-shrink:0; text-align:right; min-width:70px; }
       .lls-p-reg  { font-size:13px; font-weight:600; color:#111; }
