@@ -455,7 +455,11 @@
       num_typos: 2,
       per_page: 40,
       sort_by: "_text_match:desc",
-      prioritize_exact_match: true
+      prioritize_exact_match: true,
+      // infix=fallback: kör normal sökning först. Om 0 träffar → testa
+      // substring-match (så "setsu" hittar "Fujisetsu"). En "off"-post per
+      // query_by-fält. Substring-sökning kräver att fältet är infix-indexerat.
+      infix: "fallback,off,off,off,off"
     };
     if (brand) {
       productSearch.filter_by = `brand:=[\`${brand.name}\`]`;
