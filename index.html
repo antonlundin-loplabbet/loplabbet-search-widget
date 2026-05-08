@@ -82,6 +82,50 @@
       border-radius: 3px;
       font-size: 13px;
     }
+
+    /* ── Mobile ───────────────────────────────────────────────────── */
+    @media (max-width: 720px) {
+      .header {
+        flex-wrap: wrap;
+        gap: 12px;
+        padding: 12px 16px;
+      }
+      .search-wrap {
+        flex: 1 0 100%;
+        max-width: 100%;
+        order: 3;
+      }
+      .logo {
+        font-size: 20px;
+      }
+      .nav {
+        font-size: 13px;
+        gap: 14px;
+        margin-left: auto;
+      }
+      .topbar {
+        padding: 6px 12px;
+        font-size: 11px;
+      }
+      .content {
+        padding: 40px 16px;
+      }
+      .content h1 {
+        font-size: 22px;
+      }
+      .test-tip {
+        margin: 24px auto;
+        padding: 16px;
+      }
+      .test-tip ul {
+        margin-left: 18px;
+      }
+    }
+
+    /* Smalaste mobil — nav får inte plats, döljs */
+    @media (max-width: 480px) {
+      .nav { display: none; }
+    }
   </style>
 </head>
 <body>

@@ -786,9 +786,25 @@
   function positionDropdown(dd, input) {
     const ir = input.getBoundingClientRect();
     const pr = dd.parentElement.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const margin = 8; // säkerhetsavstånd från skärmkanterna
+
+    // Önskad bredd: minst input-bredden, minst 680px på desktop,
+    // men aldrig bredare än viewport (mobil).
+    const desiredWidth = Math.max(ir.width, 680);
+    const maxWidth = viewportWidth - margin * 2;
+    const finalWidth = Math.min(desiredWidth, maxWidth);
+
+    // Justera left så dropdown inte flödar utanför skärmen i vänster/höger kant
+    let leftAbsolute = ir.left;
+    if (leftAbsolute + finalWidth > viewportWidth - margin) {
+      leftAbsolute = viewportWidth - margin - finalWidth;
+    }
+    if (leftAbsolute < margin) leftAbsolute = margin;
+
     dd.style.top   = (ir.bottom - pr.top + 4) + "px";
-    dd.style.left  = (ir.left - pr.left) + "px";
-    dd.style.width = Math.max(ir.width, 680) + "px";
+    dd.style.left  = (leftAbsolute - pr.left) + "px";
+    dd.style.width = finalWidth + "px";
   }
 
   // ── Tangentbordsnavigation: hitta alla länkar i dropdown och markera ──
