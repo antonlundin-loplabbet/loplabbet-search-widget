@@ -1,6 +1,6 @@
 /**
  * Löplabbet Search Widget v4.6
- * - Smart-Enter: prioriterar märkessida → guide → toppträff → katalogsök
+ * - Smart-Enter: prioriterar markerad träff → märkessida/enda träff → katalogsök
  * - Tangentbordsnavigation: Pil upp/ner, Enter, Esc
  * - Egen "Pinnade guider"-sektion
  * - Brand- och guide-inferens från produktresultat
@@ -903,19 +903,14 @@
   // ── Smart-Enter: avgör vart Enter ska ta användaren ────────────────────
   // Prioritetsordning:
   // 1. Markerad träff i dropdown (pil-navigerad)
-  // 2. Pinnad guide om sådan finns (race-guiden för "vaporfly")
-  // 3. Märkessida om söktermen är ett rent märke ("hoka")
-  // 4. Toppträffen om den är dominerande (≥2x score än 2:an)
+  // 2. Märkessida om söktermen är ett rent märke ("hoka")
+  // 3. Enda produktträffen om det bara finns en
+  // 4. Pinnad guide om det saknas produktträffar
   // 5. Fallback: sökresultatsidan /katalog?q=...
   function resolveEnterDestination(state) {
     const { query, productHits, pinnedGuides, matchedBrands, fallbackUrl } = state;
 
-    // 2. Pinnad guide (hög konfidens — vi har redan inferens)
-    if (pinnedGuides && pinnedGuides.length === 1) {
-      return { url: pinnedGuides[0].url, reason: "pinnad guide" };
-    }
-
-    // 3. Söktermen är BARA ett märke (utan modellnamn efter)
+    // 2. Söktermen är BARA ett märke (utan modellnamn efter)
     if (matchedBrands.length === 1) {
       const brand = matchedBrands[0];
       const stripped = stripBrandFromQuery(query, brand);
@@ -927,24 +922,17 @@
       }
     }
 
-    // 4. Toppträff dominerar (sällsynt — kräver att 1:an är >= 2x bättre än 2:an)
-    if (productHits.length >= 2) {
-      const top = productHits[0];
-      const second = productHits[1];
-      const topScore = Number(top?.text_match || 0);
-      const secondScore = Number(second?.text_match || 0);
-      if (topScore > 0 && topScore >= secondScore * 2) {
-        return {
-          url: top.document?.product_url || fallbackUrl,
-          reason: "dominerande toppträff"
-        };
-      }
-    } else if (productHits.length === 1) {
-      // Bara en träff totalt → gå direkt dit
+    // 3. Bara en produktträff totalt → gå direkt dit.
+    if (productHits.length === 1) {
       return {
         url: productHits[0].document?.product_url || fallbackUrl,
         reason: "enda produktträffen"
       };
+    }
+
+    // 4. Om det inte finns produkter men en tydlig guide finns, använd guiden.
+    if (productHits.length === 0 && pinnedGuides && pinnedGuides.length === 1) {
+      return { url: pinnedGuides[0].url, reason: "pinnad guide utan produktträffar" };
     }
 
     // 5. Fallback
