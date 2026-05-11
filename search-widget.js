@@ -58,6 +58,10 @@
   let HAS_TECH_FIELDS = false;
   let BASE_DATA_LOADED = false;
 
+  function isTestMode() {
+    return new URLSearchParams(window.location.search).get("lls_search_test") === "1";
+  }
+
   async function loadProductSchema() {
     try {
       const url = `https://${HOST}/collections/products` +
@@ -830,6 +834,12 @@
       .lls-host-hidden {
         display:none !important;
       }
+      html.lls-active-search [class*="recent" i],
+      html.lls-active-search [class*="history" i],
+      html.lls-active-search [class*="suggest" i],
+      html.lls-active-search [class*="autocomplete" i] {
+        display:none !important;
+      }
       .lls-grid {
         display:grid;
         grid-template-columns:42% 58%;
@@ -1097,6 +1107,8 @@
   }
 
   function hideHostSearchResults(input, dd) {
+    if (isTestMode()) document.documentElement.classList.add("lls-active-search");
+
     const root = input.closest("form,.search-wrapper,.header-search,.search-wrap,header") || input.parentElement;
     if (!root) return;
 
@@ -1141,9 +1153,24 @@
 
       el.classList.add("lls-host-hidden");
     }
+
+    if (isTestMode()) {
+      const q = (input.value || "").trim().toLowerCase();
+      for (const el of document.querySelectorAll("div,section,aside,ul,ol")) {
+        if (el === dd || dd.contains(el) || el.contains(dd) || el.contains(input)) continue;
+        if (el.classList.contains("lls-host-hidden")) continue;
+        const text = (el.textContent || "").toLowerCase();
+        const looksLikeRecentSearches =
+          text.includes("senaste sökningar") ||
+          text.includes("rensa alla") ||
+          (q && text.includes(q) && text.includes("×"));
+        if (looksLikeRecentSearches) el.classList.add("lls-host-hidden");
+      }
+    }
   }
 
   function showHostSearchResults(input, dd) {
+    document.documentElement.classList.remove("lls-active-search");
     for (const el of document.querySelectorAll(".lls-host-hidden")) {
       if (el !== dd && !dd.contains(el)) el.classList.remove("lls-host-hidden");
     }
@@ -1266,6 +1293,10 @@
 
     document.addEventListener("click", e => {
       if (!dd.contains(e.target) && e.target !== input) close();
+    });
+
+    input.addEventListener("focus", () => {
+      hideHostSearchResults(input, dd);
     });
 
     input.addEventListener("keydown", e => {
