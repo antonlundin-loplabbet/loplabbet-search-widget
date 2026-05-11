@@ -614,7 +614,8 @@
     if (!clothing) productHits = productHits.filter(h => !isClothingProduct(h));
     const productHitsForInference = productHits;
     productHits = dedupeByModel(productHits);
-    productHits = productHits.slice(0, MAX_PRODUCTS);
+    const maxProducts = window.innerWidth <= 640 ? 6 : MAX_PRODUCTS;
+    productHits = productHits.slice(0, maxProducts);
 
     // Pinnade guider: först explicit query-match, sedan inferens från produkter
     let pinnedGuides = getPinnedGuides(query);
@@ -718,8 +719,8 @@
     if (hasLeft && hasProducts) {
       container.innerHTML = `
         <div class="lls-grid">
-          <div class="lls-col-left">${leftHtml}</div>
           <div class="lls-col-right">${rightHtml}</div>
+          <div class="lls-col-left">${leftHtml}</div>
           ${footer}
         </div>`;
     } else if (hasLeft) {
@@ -747,11 +748,13 @@
         max-height:78vh;
       }
       .lls-col-left {
+        grid-column:1; grid-row:1;
         border-right:1px solid #f0f0f0;
         overflow-y:auto; max-height:78vh;
         padding-bottom:8px;
       }
       .lls-col-right {
+        grid-column:2; grid-row:1;
         overflow-y:auto; max-height:78vh;
         padding-bottom:8px;
       }
@@ -820,6 +823,79 @@
       .lls-footer a { font-size:13px; color:${PINK}; font-weight:600; text-decoration:none; }
       .lls-footer a:hover { text-decoration:underline; }
       .lls-empty { padding:20px 16px; color:#888; font-size:14px; }
+
+      @media (max-width:640px) {
+        #lls-dropdown {
+          border-radius:7px;
+          box-shadow:0 10px 28px rgba(0,0,0,.16);
+        }
+        .lls-grid {
+          display:block;
+          max-height:82vh;
+          overflow-y:auto;
+        }
+        .lls-col-left,
+        .lls-col-right,
+        .lls-single {
+          max-height:none;
+          overflow:visible;
+          padding-bottom:4px;
+        }
+        .lls-col-left {
+          border-right:none;
+          border-top:1px solid #f0f0f0;
+        }
+        .lls-col-right .lls-col-header:first-child {
+          border-top:none;
+        }
+        .lls-col-left .lls-col-header:first-child {
+          border-top:1px solid #f4f4f4;
+        }
+        .lls-col-header {
+          padding:11px 12px 4px;
+          font-size:10px;
+        }
+        .lls-page-row {
+          padding:8px 12px;
+          font-size:13px;
+        }
+        .lls-prod-row {
+          align-items:flex-start;
+          gap:9px;
+          padding:9px 12px;
+        }
+        .lls-prod-img {
+          width:44px;
+          height:44px;
+        }
+        .lls-prod-name {
+          font-size:12.5px;
+          white-space:normal;
+          display:-webkit-box;
+          -webkit-line-clamp:2;
+          -webkit-box-orient:vertical;
+        }
+        .lls-prod-specs {
+          white-space:normal;
+          display:-webkit-box;
+          -webkit-line-clamp:1;
+          -webkit-box-orient:vertical;
+        }
+        .lls-prod-price {
+          min-width:58px;
+          padding-top:12px;
+        }
+        .lls-p-reg,
+        .lls-p-sale {
+          font-size:12.5px;
+        }
+        .lls-footer {
+          padding:12px;
+        }
+        .lls-footer a {
+          font-size:12.5px;
+        }
+      }
     `;
     document.head.appendChild(s);
   }
