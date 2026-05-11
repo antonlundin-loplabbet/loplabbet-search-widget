@@ -26,10 +26,39 @@
     "buff","long sleeve","langärm","skjorta"
   ];
 
+  const RACE_QUERY_KW = [
+    "tävling","tävlingar","tävlingssko","tävlingsko","tävlingsskor",
+    "racingsko","racingskor","race","racing","kolfiber","kolfibersko",
+    "kolfiberskor","kolfiberplatta","carbon","carbonplatta","carbonsko"
+  ];
+
   // Varumärken hämtas från Typesense vid widgetstart — undviker att
   // hårdkoda alla varianter ("Hoka" vs "Hoka One One" vs "HOKA").
   // [{name, slug, count}, ...]
   let BRAND_INDEX = [];
+  let HAS_SHOE_TYPE = false;
+
+  async function loadProductSchema() {
+    try {
+      const url = `https://${HOST}/collections/products` +
+        `?x-typesense-api-key=${API_KEY}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      const hasField = !!data.fields?.some(f => f.name === "shoe_type");
+      if (hasField) {
+        const facetUrl = `https://${HOST}/collections/products/documents/search` +
+          `?q=*&query_by=name&facet_by=shoe_type&per_page=0&max_facet_values=20` +
+          `&x-typesense-api-key=${API_KEY}`;
+        const facetRes = await fetch(facetUrl);
+        const facetData = await facetRes.json();
+        const counts = facetData.facet_counts?.[0]?.counts || [];
+        HAS_SHOE_TYPE = counts.some(c => c.value === "Tävling" && c.count > 0);
+      }
+      console.log(`[LLS] shoe_type ${HAS_SHOE_TYPE ? "är redo" : "använder fallback"} för race-filter.`);
+    } catch (e) {
+      console.warn("[LLS] Kunde inte läsa products-schema:", e);
+    }
+  }
 
   async function loadBrands() {
     try {
@@ -318,6 +347,17 @@
     return CLOTHING_QUERY_KW.some(kw => lq.includes(kw));
   }
 
+  function isRaceSearch(q) {
+    const lq = q.toLowerCase();
+    return RACE_QUERY_KW.some(kw => lq.includes(kw));
+  }
+
+  function stripRaceTermsFromQuery(query) {
+    return RACE_QUERY_KW.reduce((q, kw) => {
+      return q.replace(new RegExp(`\\b${escapeRegex(kw)}\\b`, "ig"), " ");
+    }, query).replace(/\s+/g, " ").trim();
+  }
+
   function isClothingProduct(hit) {
     const name = (hit.document?.name || "").toLowerCase();
     return CLOTHING_PRODUCT_KW.some(kw => name.includes(kw));
@@ -444,14 +484,21 @@
   async function search(query) {
     const brand = detectBrand(query);
     const stripped = stripBrandFromQuery(query, brand);
+    const raceSearch = isRaceSearch(query);
+    const strippedIntent = raceSearch ? stripRaceTermsFromQuery(stripped) : stripped;
     // Om bara märket angetts ("hoka") utan resterande sökord → match-allt
-    const productQuery = stripped || (brand ? "*" : query);
+    const productQuery = strippedIntent || (brand || raceSearch ? "*" : query);
+    const productQueryBy = HAS_SHOE_TYPE
+      ? "name,brand,shoe_type,description,category,subcategory"
+      : "name,brand,description,category,subcategory";
+    const productQueryByWeights = HAS_SHOE_TYPE ? "5,8,7,1,3,3" : "5,8,1,3,3";
+    const productInfix = HAS_SHOE_TYPE ? "fallback,off,off,off,off,off" : "fallback,off,off,off,off";
 
     const productSearch = {
       collection: "products",
       q: productQuery,
-      query_by:         "name,brand,description,category,subcategory",
-      query_by_weights: "5,8,1,3,3",
+      query_by:         productQueryBy,
+      query_by_weights: productQueryByWeights,
       num_typos: 2,
       per_page: 40,
       sort_by: "_text_match:desc",
@@ -459,10 +506,20 @@
       // infix=fallback: kör normal sökning först. Om 0 träffar → testa
       // substring-match (så "setsu" hittar "Fujisetsu"). En "off"-post per
       // query_by-fält. Substring-sökning kräver att fältet är infix-indexerat.
-      infix: "fallback,off,off,off,off"
+      infix: productInfix
     };
+    const filters = [];
     if (brand) {
-      productSearch.filter_by = `brand:=[\`${brand.name}\`]`;
+      filters.push(`brand:=[\`${brand.name}\`]`);
+    }
+    if (raceSearch) {
+      filters.push(HAS_SHOE_TYPE
+        ? "shoe_type:=`Tävling`"
+        : "(name:`KOLFIBERSKOR` || name:`TÄVLINGSSKOR` || name:`RACINGSKOR`)"
+      );
+    }
+    if (filters.length) {
+      productSearch.filter_by = filters.join(" && ");
     }
     const body = {
       searches: [
@@ -827,6 +884,7 @@
 
     // Ladda varumärken i bakgrunden
     loadBrands();
+    loadProductSchema();
 
     const dd = createDropdown(input);
     let timer, lastQuery = "", reqId = 0;
