@@ -826,7 +826,7 @@
     s.id = "lls-styles";
     s.textContent = `
       #lls-dropdown {
-        position:absolute; z-index:99999;
+        position:fixed; z-index:2147483647;
         background:#fff; border:1px solid #e0e0e0;
         border-radius:8px; box-shadow:0 8px 32px rgba(0,0,0,.13);
         overflow:hidden; font-family:inherit;
@@ -1069,40 +1069,36 @@
 
   // ── Dropdown-positionering ─────────────────────────────────────────────
   function createDropdown(input) {
-    const parent = input.closest("form,.search-wrapper,.header-search,.search-wrap,header") || input.parentElement;
     let dd = document.getElementById("lls-dropdown");
     if (!dd) {
       dd = document.createElement("div");
       dd.id = "lls-dropdown";
       dd.style.display = "none";
     }
-    if (getComputedStyle(parent).position === "static") parent.style.position = "relative";
-    if (dd.parentElement !== parent) parent.appendChild(dd);
+    if (dd.parentElement !== document.body) document.body.appendChild(dd);
     return dd;
   }
 
   function positionDropdown(dd, input) {
     const ir = input.getBoundingClientRect();
-    const pr = dd.parentElement.getBoundingClientRect();
     const viewportWidth = window.innerWidth;
     const margin = 8; // säkerhetsavstånd från skärmkanterna
 
-    // Önskad bredd: minst input-bredden, minst 680px på desktop.
-    // På sajten ligger gamla sökpanelen ibland lite bredare än inputen, så
-    // ge dropdownen några extra pixlar så den täcker hela overlayytan.
-    const desiredWidth = Math.max(ir.width + 16, 680);
+    // Önskad bredd: minst input-bredden, minst 680px på desktop,
+    // men aldrig bredare än viewport.
+    const desiredWidth = Math.max(ir.width, 680);
     const maxWidth = viewportWidth - margin * 2;
     const finalWidth = Math.min(desiredWidth, maxWidth);
 
-    // Justera left så dropdown inte flödar utanför skärmen i vänster/höger kant
+    // Justera left så dropdown inte flödar utanför skärmen i vänster/höger kant.
     let leftAbsolute = ir.left;
     if (leftAbsolute + finalWidth > viewportWidth - margin) {
       leftAbsolute = viewportWidth - margin - finalWidth;
     }
     if (leftAbsolute < margin) leftAbsolute = margin;
 
-    dd.style.top   = (ir.bottom - pr.top + 4) + "px";
-    dd.style.left  = (leftAbsolute - pr.left) + "px";
+    dd.style.top   = (ir.bottom - 1) + "px";
+    dd.style.left  = leftAbsolute + "px";
     dd.style.width = finalWidth + "px";
   }
 
