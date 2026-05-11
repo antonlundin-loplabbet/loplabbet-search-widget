@@ -31,12 +31,31 @@
     "racingsko","racingskor","race","racing","kolfiber","kolfibersko",
     "kolfiberskor","kolfiberplatta","carbon","carbonplatta","carbonsko"
   ];
+  const NON_RACE_QUERY_PATTERNS = [
+    /\bsuunto\s+race\b/i,
+    /\brace\s+(s|2)\b/i,
+  ];
+
+  const GENDER_INTENTS = [
+    { terms: ["dam", "dam-", "dam sko", "damsko", "damskor", "kvinna", "kvinnor", "women", "women's", "ladies"], filter: "gender:=[`Dam`,`Unisex`]" },
+    { terms: ["herr", "herr-", "herr sko", "herrsko", "herrskor", "man", "män", "men", "men's", "herre"], filter: "gender:=[`Herr`,`Unisex`]" },
+  ];
+
+  const TECH_INTENTS = [
+    { terms: ["bred", "bred passform", "bredare", "vid passform", "wide", "wide fit", "extra wide", "extra bred", "bredläst", "bred läst", "bred fot", "breda fötter", "bredare fötter", "vidläst"], filter: "last_width:=[`Bred`,`Extra bred`]" },
+    { terms: ["smal", "smal passform", "narrow", "narrow fit", "smalläst", "smal läst", "smal fot", "smala fötter"], filter: "last_width:=`Smal`" },
+    { terms: ["mjuk", "mjukt", "dämpad", "mjuk dämpning", "max dämpning", "maxdämpad", "maximal dämpning", "plush", "soft cushioning", "väldigt dämpad", "supermjuk", "extra dämpad"], filter: "cushioning:=`Mjuk`" },
+    { terms: ["fast dämpning", "fastdämpning", "responsiv", "responsiv dämpning", "snabb dämpning", "firm cushioning"], filter: "cushioning:=`Fast`" },
+    { terms: ["stabil", "stabilitet", "stability", "pronationsstöd", "pronation", "överpronation", "stöd", "motionkontroll", "motion control", "kontroll"], filter: "stability:=`Stabil`" },
+    { terms: ["neutral", "neutralt", "neutral löpning", "neutral sko", "neutral löpare"], filter: "stability:=[`Flexibel`,`Medium`]" },
+  ];
 
   // Varumärken hämtas från Typesense vid widgetstart — undviker att
   // hårdkoda alla varianter ("Hoka" vs "Hoka One One" vs "HOKA").
   // [{name, slug, count}, ...]
   let BRAND_INDEX = [];
   let HAS_SHOE_TYPE = false;
+  let HAS_TECH_FIELDS = false;
 
   async function loadProductSchema() {
     try {
@@ -44,7 +63,9 @@
         `?x-typesense-api-key=${API_KEY}`;
       const res = await fetch(url);
       const data = await res.json();
-      const hasField = !!data.fields?.some(f => f.name === "shoe_type");
+      const has = (name) => !!data.fields?.some(f => f.name === name);
+      const hasField = has("shoe_type");
+      HAS_TECH_FIELDS = has("gender") && has("last_width") && has("cushioning") && has("stability");
       if (hasField) {
         const facetUrl = `https://${HOST}/collections/products/documents/search` +
           `?q=*&query_by=name&facet_by=shoe_type&per_page=0&max_facet_values=20` +
@@ -347,15 +368,51 @@
     return CLOTHING_QUERY_KW.some(kw => lq.includes(kw));
   }
 
-  function isRaceSearch(q) {
-    const lq = q.toLowerCase();
-    return RACE_QUERY_KW.some(kw => lq.includes(kw));
+  function hasQueryTerm(query, term) {
+    const normalized = String(query || "").toLowerCase();
+    const escaped = escapeRegex(term.toLowerCase()).replace(/\s+/g, "\\s+");
+    return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}(?=$|[^\\p{L}\\p{N}])`, "iu").test(normalized);
   }
 
-  function stripRaceTermsFromQuery(query) {
-    return RACE_QUERY_KW.reduce((q, kw) => {
-      return q.replace(new RegExp(`\\b${escapeRegex(kw)}\\b`, "ig"), " ");
+  function isRaceSearch(q) {
+    const matched = RACE_QUERY_KW.filter(kw => hasQueryTerm(q, kw));
+    if (!matched.length) return false;
+
+    const onlyGenericRace = matched.every(kw => kw === "race" || kw === "racing");
+    if (onlyGenericRace && NON_RACE_QUERY_PATTERNS.some(re => re.test(q))) return false;
+
+    return true;
+  }
+
+  function stripTermsFromQuery(query, terms) {
+    return terms.reduce((q, term) => {
+      const escaped = escapeRegex(term).replace(/\s+/g, "\\s+");
+      return q.replace(new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}(?=$|[^\\p{L}\\p{N}])`, "giu"), " ");
     }, query).replace(/\s+/g, " ").trim();
+  }
+
+  function getIntentFilters(query) {
+    const filters = [];
+    const stripTerms = [];
+
+    for (const intent of GENDER_INTENTS) {
+      if (intent.terms.some(term => hasQueryTerm(query, term))) {
+        filters.push(intent.filter);
+        stripTerms.push(...intent.terms);
+        break;
+      }
+    }
+
+    if (HAS_TECH_FIELDS) {
+      for (const intent of TECH_INTENTS) {
+        if (intent.terms.some(term => hasQueryTerm(query, term))) {
+          filters.push(intent.filter);
+          stripTerms.push(...intent.terms);
+        }
+      }
+    }
+
+    return { filters, stripTerms };
   }
 
   function isClothingProduct(hit) {
@@ -485,9 +542,14 @@
     const brand = detectBrand(query);
     const stripped = stripBrandFromQuery(query, brand);
     const raceSearch = isRaceSearch(query);
-    const strippedIntent = raceSearch ? stripRaceTermsFromQuery(stripped) : stripped;
+    const intent = getIntentFilters(query);
+    const termsToStrip = [
+      ...(raceSearch ? RACE_QUERY_KW : []),
+      ...intent.stripTerms,
+    ];
+    const strippedIntent = termsToStrip.length ? stripTermsFromQuery(stripped, termsToStrip) : stripped;
     // Om bara märket angetts ("hoka") utan resterande sökord → match-allt
-    const productQuery = strippedIntent || (brand || raceSearch ? "*" : query);
+    const productQuery = strippedIntent || (brand || raceSearch || intent.filters.length ? "*" : query);
     const productQueryBy = HAS_SHOE_TYPE
       ? "name,brand,shoe_type,description,category,subcategory"
       : "name,brand,description,category,subcategory";
@@ -518,6 +580,7 @@
         : "(name:`KOLFIBERSKOR` || name:`TÄVLINGSSKOR` || name:`RACINGSKOR`)"
       );
     }
+    filters.push(...intent.filters);
     if (filters.length) {
       productSearch.filter_by = filters.join(" && ");
     }
