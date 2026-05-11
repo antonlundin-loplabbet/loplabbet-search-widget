@@ -1077,9 +1077,10 @@
     const viewportWidth = window.innerWidth;
     const margin = 8; // säkerhetsavstånd från skärmkanterna
 
-    // Önskad bredd: minst input-bredden, minst 680px på desktop,
-    // men aldrig bredare än viewport (mobil).
-    const desiredWidth = Math.max(ir.width, 680);
+    // Önskad bredd: minst input-bredden, minst 680px på desktop.
+    // På sajten ligger gamla sökpanelen ibland lite bredare än inputen, så
+    // ge dropdownen några extra pixlar så den täcker hela overlayytan.
+    const desiredWidth = Math.max(ir.width + 16, 680);
     const maxWidth = viewportWidth - margin * 2;
     const finalWidth = Math.min(desiredWidth, maxWidth);
 
@@ -1099,6 +1100,8 @@
     const root = input.closest("form,.search-wrapper,.header-search,.search-wrap,header") || input.parentElement;
     if (!root) return;
 
+    showHostSearchResults(input, dd);
+
     for (const child of Array.from(root.children)) {
       if (child === input || child === dd || child.contains(input) || child.contains(dd)) continue;
       const text = (child.textContent || "").toLowerCase();
@@ -1110,12 +1113,38 @@
 
       if (looksLikeResults) child.classList.add("lls-host-hidden");
     }
+
+    const dr = dd.getBoundingClientRect();
+    const candidates = document.querySelectorAll("div,section,aside,ul,ol");
+    for (const el of candidates) {
+      if (el === dd || dd.contains(el) || el.contains(dd) || el.contains(input)) continue;
+      if (el.closest("#lls-dropdown")) continue;
+
+      const r = el.getBoundingClientRect();
+      const overlaps =
+        r.right > dr.left &&
+        r.left < dr.right + 80 &&
+        r.bottom > dr.top &&
+        r.top < dr.bottom;
+      if (!overlaps) continue;
+
+      const text = (el.textContent || "").toLowerCase();
+      const looksLikeHostResults =
+        text.includes("produkter") ||
+        text.includes("sidor") ||
+        text.includes("visa alla") ||
+        text.includes("kr");
+      if (!looksLikeHostResults) continue;
+
+      const style = getComputedStyle(el);
+      if (style.position === "static" && r.width > window.innerWidth * 0.95) continue;
+
+      el.classList.add("lls-host-hidden");
+    }
   }
 
   function showHostSearchResults(input, dd) {
-    const root = input.closest("form,.search-wrapper,.header-search,.search-wrap,header") || input.parentElement;
-    if (!root) return;
-    for (const el of root.querySelectorAll(".lls-host-hidden")) {
+    for (const el of document.querySelectorAll(".lls-host-hidden")) {
       if (el !== dd && !dd.contains(el)) el.classList.remove("lls-host-hidden");
     }
   }
