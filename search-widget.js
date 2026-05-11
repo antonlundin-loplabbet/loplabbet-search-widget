@@ -234,7 +234,12 @@
     },
     {
       key: "super-trainer",
-      keywords: ["super trainer", "supertrainer", "super-trainer"],
+      keywords: [
+        "super trainer", "supertrainer", "super-trainer",
+        "snabb sko", "snabba skor", "snabba löparskor", "snabb löparsko",
+        "tempo sko", "tempo skor", "temposko", "temposkor",
+        "intervallsko", "intervallskor", "tröskelsko", "tröskelskor"
+      ],
       pages: [
         {
           url:   "https://www.loplabbet.se/landningssida/loplabbets-skoguide-2026-super-trainer",
@@ -244,7 +249,12 @@
     },
     {
       key: "daily-trainer",
-      keywords: ["daily trainer", "dailytrainer", "daily-trainer", "vardagsträning", "träningssko"],
+      keywords: [
+        "daily trainer", "dailytrainer", "daily-trainer",
+        "vardagsträning", "träningssko", "träningsskor",
+        "mängdsko", "mängdskor", "mängdträning", "distanssko", "distansskor",
+        "vardagssko", "vardagsskor"
+      ],
       pages: [
         {
           url:   "https://www.loplabbet.se/landningssida/loplabbets-skoguide-2026-daily-trainer",
@@ -254,7 +264,11 @@
     },
     {
       key: "race",
-      keywords: ["race", "tävling", "tävlingssko", "kolfiber", "kolfibersko"],
+      keywords: [
+        "race", "racing", "tävling", "tävlingar",
+        "tävlingssko", "tävlingsko", "tävlingsskor",
+        "kolfiber", "kolfibersko", "kolfiberskor", "carbonsko", "carbonplatta"
+      ],
       pages: [
         {
           url:   "https://www.loplabbet.se/landningssida/loplabbets-skoguide-2026-race",
@@ -302,9 +316,72 @@
   function getPinnedGuides(query) {
     const q = query.toLowerCase();
     for (const entry of PINNED_GUIDES) {
-      if (entry.keywords.some(kw => q.includes(kw))) return entry.pages;
+      if (entry.keywords.some(kw => q.includes(kw))) {
+        return entry.pages.map(page => ({ ...page, guideKey: entry.key }));
+      }
     }
     return [];
+  }
+
+  const OLD_GUIDE_PATTERNS = {
+    "super-trainer": [
+      /skoguide[-\s]*2025.*super/i,
+      /produktguider\/super-trainer/i,
+    ],
+    "daily-trainer": [
+      /skoguide[-\s]*2025.*daily/i,
+      /produktguider\/daily/i,
+    ],
+    race: [
+      /skoguide[-\s]*2025.*race/i,
+      /produktguider\/race/i,
+    ],
+  };
+
+  function filterOlderGuidesWhenPinned(pageHits, pinnedGuides) {
+    const pinnedKeys = new Set((pinnedGuides || []).map(p => p.guideKey).filter(Boolean));
+    if (!pinnedKeys.size) return pageHits;
+
+    return pageHits.filter(hit => {
+      const d = hit.document || {};
+      const text = `${d.url || ""} ${d.title || ""}`.toLowerCase();
+      for (const key of pinnedKeys) {
+        const patterns = OLD_GUIDE_PATTERNS[key] || [];
+        if (patterns.some(re => re.test(text))) return false;
+      }
+      return true;
+    });
+  }
+
+  function tokeniseProductQuery(query) {
+    const stop = new Set([
+      "sko", "skor", "loparsko", "loparskor", "running", "shoe", "shoes",
+      "snabb", "snabba", "tempo", "intervall", "intervaller", "super",
+      "trainer", "dam", "herr", "women", "men", "unisex", "tavling",
+      "tavlingsskor", "tavlingssko", "tavlingsko", "kolfiber", "race",
+      "racing", "bred", "smal", "mjuk", "stabil", "neutral"
+    ]);
+
+    return String(query || "")
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .split(/[^a-z0-9]+/i)
+      .filter(t => t.length >= 3 && !stop.has(t));
+  }
+
+  function isSpecificProductQuery(query, productHits) {
+    const tokens = tokeniseProductQuery(query);
+    if (!tokens.length || !productHits.length) return false;
+
+    const top = productHits.slice(0, 5);
+    return top.some(hit => {
+      const name = (hit.document?.name || "")
+        .toLowerCase()
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "");
+      return tokens.every(t => name.includes(t));
+    });
   }
 
   // Härled guide från produkternas namn + beskrivning.
@@ -340,7 +417,7 @@
     if (!bestKey) return [];
 
     const guide = PINNED_GUIDES.find(g => g.key === bestKey);
-    return guide ? guide.pages : [];
+    return guide ? guide.pages.map(page => ({ ...page, guideKey: guide.key })) : [];
   }
 
   const MAX_PAGES_PER_SECTION = 3;
@@ -617,16 +694,22 @@
     const maxProducts = window.innerWidth <= 640 ? 6 : MAX_PRODUCTS;
     productHits = productHits.slice(0, maxProducts);
 
-    // Pinnade guider: först explicit query-match, sedan inferens från produkter
-    let pinnedGuides = getPinnedGuides(query);
-    if (pinnedGuides.length === 0) {
+    const specificProductQuery = isSpecificProductQuery(query, productHitsForInference);
+
+    // Pinnade guider: först explicit query-match, sedan inferens från produkter.
+    // Vid specifika modellsökningar låter vi vanliga resultat/pageträffar vinna.
+    let pinnedGuides = specificProductQuery ? [] : getPinnedGuides(query);
+    if (!specificProductQuery && pinnedGuides.length === 0) {
       pinnedGuides = inferGuideFromProducts(productHitsForInference);
       if (pinnedGuides.length) {
         console.log(`[LLS] Guide-inferens från produkter:`, pinnedGuides.map(p => p.title));
       }
     }
 
-    const sectionGroups = groupAndSortPages(pageResult?.hits || [], pinnedGuides);
+    const pageHits = specificProductQuery
+      ? (pageResult?.hits || [])
+      : filterOlderGuidesWhenPinned(pageResult?.hits || [], pinnedGuides);
+    const sectionGroups = groupAndSortPages(pageHits, pinnedGuides);
     let matchedBrands = findMatchingBrands(query);
     // Fallback: härled märke från produkterna ("endorphin" → Saucony)
     if (matchedBrands.length === 0) {
@@ -1078,8 +1161,9 @@
             productHits = productHits.filter(h => !isClothingProduct(h));
           }
           const productHitsForInference = productHits;
-          let pinnedGuides = getPinnedGuides(query);
-          if (pinnedGuides.length === 0) {
+          const specificProductQuery = isSpecificProductQuery(query, productHitsForInference);
+          let pinnedGuides = specificProductQuery ? [] : getPinnedGuides(query);
+          if (!specificProductQuery && pinnedGuides.length === 0) {
             pinnedGuides = inferGuideFromProducts(productHitsForInference);
           }
           let matchedBrands = findMatchingBrands(query);
