@@ -56,6 +56,7 @@
   let BRAND_INDEX = [];
   let HAS_SHOE_TYPE = false;
   let HAS_TECH_FIELDS = false;
+  let BASE_DATA_LOADED = false;
 
   async function loadProductSchema() {
     try {
@@ -697,9 +698,10 @@
     const specificProductQuery = isSpecificProductQuery(query, productHitsForInference);
 
     // Pinnade guider: först explicit query-match, sedan inferens från produkter.
-    // Vid specifika modellsökningar låter vi vanliga resultat/pageträffar vinna.
-    let pinnedGuides = specificProductQuery ? [] : getPinnedGuides(query);
-    if (!specificProductQuery && pinnedGuides.length === 0) {
+    // Smart-Enter går ändå till katalogen när produkter finns, så guider kan visas
+    // utan att kapa modellsökningar som "vaporfly".
+    let pinnedGuides = getPinnedGuides(query);
+    if (pinnedGuides.length === 0) {
       pinnedGuides = inferGuideFromProducts(productHitsForInference);
       if (pinnedGuides.length) {
         console.log(`[LLS] Guide-inferens från produkter:`, pinnedGuides.map(p => p.title));
@@ -802,8 +804,8 @@
     if (hasLeft && hasProducts) {
       container.innerHTML = `
         <div class="lls-grid">
-          <div class="lls-col-right">${rightHtml}</div>
           <div class="lls-col-left">${leftHtml}</div>
+          <div class="lls-col-right">${rightHtml}</div>
           ${footer}
         </div>`;
     } else if (hasLeft) {
@@ -824,6 +826,9 @@
         background:#fff; border:1px solid #e0e0e0;
         border-radius:8px; box-shadow:0 8px 32px rgba(0,0,0,.13);
         overflow:hidden; font-family:inherit;
+      }
+      .lls-host-hidden {
+        display:none !important;
       }
       .lls-grid {
         display:grid;
@@ -913,9 +918,18 @@
           box-shadow:0 10px 28px rgba(0,0,0,.16);
         }
         .lls-grid {
-          display:block;
+          display:grid;
+          grid-template-columns:1fr;
           max-height:82vh;
           overflow-y:auto;
+        }
+        .lls-grid .lls-col-right {
+          grid-column:1;
+          grid-row:1;
+        }
+        .lls-grid .lls-col-left {
+          grid-column:1;
+          grid-row:2;
         }
         .lls-col-left,
         .lls-col-right,
@@ -1023,30 +1037,37 @@
   }
 
   // ── Hitta sökfält ──────────────────────────────────────────────────────
-  function findSearchInput() {
-    const selectors = [
-      'input[type="search"]','input[name="q"]',
-      'input[placeholder*="sök" i]','input[placeholder*="search" i]',
-      '.search-field input','#search-input',
-    ];
-    for (const sel of selectors) {
-      const el = document.querySelector(sel);
-      if (el) return el;
+  const SEARCH_INPUT_SELECTORS = [
+    'input[type="search"]','input[name="q"]',
+    'input[placeholder*="sök" i]','input[placeholder*="search" i]',
+    '.search-field input','#search-input',
+    '[role="search"] input','.search input','[class*="search" i] input',
+  ];
+
+  function findSearchInputs() {
+    const seen = new Set();
+    const inputs = [];
+    for (const sel of SEARCH_INPUT_SELECTORS) {
+      for (const el of document.querySelectorAll(sel)) {
+        if (seen.has(el)) continue;
+        seen.add(el);
+        inputs.push(el);
+      }
     }
-    return null;
+    return inputs;
   }
 
   // ── Dropdown-positionering ─────────────────────────────────────────────
   function createDropdown(input) {
+    const parent = input.closest("form,.search-wrapper,.header-search,.search-wrap,header") || input.parentElement;
     let dd = document.getElementById("lls-dropdown");
     if (!dd) {
       dd = document.createElement("div");
       dd.id = "lls-dropdown";
       dd.style.display = "none";
-      const parent = input.closest("form,.search-wrapper,.header-search,header") || input.parentElement;
-      if (getComputedStyle(parent).position === "static") parent.style.position = "relative";
-      parent.appendChild(dd);
     }
+    if (getComputedStyle(parent).position === "static") parent.style.position = "relative";
+    if (dd.parentElement !== parent) parent.appendChild(dd);
     return dd;
   }
 
@@ -1074,6 +1095,31 @@
     dd.style.width = finalWidth + "px";
   }
 
+  function hideHostSearchResults(input, dd) {
+    const root = input.closest("form,.search-wrapper,.header-search,.search-wrap,header") || input.parentElement;
+    if (!root) return;
+
+    for (const child of Array.from(root.children)) {
+      if (child === input || child === dd || child.contains(input) || child.contains(dd)) continue;
+      const text = (child.textContent || "").toLowerCase();
+      const looksLikeResults =
+        text.includes("produkter") ||
+        text.includes("sidor") ||
+        text.includes("visa alla") ||
+        child.querySelector("a,img");
+
+      if (looksLikeResults) child.classList.add("lls-host-hidden");
+    }
+  }
+
+  function showHostSearchResults(input, dd) {
+    const root = input.closest("form,.search-wrapper,.header-search,.search-wrap,header") || input.parentElement;
+    if (!root) return;
+    for (const el of root.querySelectorAll(".lls-host-hidden")) {
+      if (el !== dd && !dd.contains(el)) el.classList.remove("lls-host-hidden");
+    }
+  }
+
   // ── Tangentbordsnavigation: hitta alla länkar i dropdown och markera ──
   function getNavigableItems(dd) {
     return Array.from(dd.querySelectorAll("a.lls-page-row, a.lls-prod-row"));
@@ -1086,15 +1132,22 @@
     }
   }
 
-  // ── Init ───────────────────────────────────────────────────────────────
-  function init() {
-    injectStyles();
-    const input = findSearchInput();
-    if (!input) { console.warn("[LLS] Hittade inget sökfält."); return; }
+  function ensureBaseDataLoaded() {
+    if (BASE_DATA_LOADED) return;
+    BASE_DATA_LOADED = true;
 
     // Ladda varumärken i bakgrunden
     loadBrands();
     loadProductSchema();
+  }
+
+  // ── Init ───────────────────────────────────────────────────────────────
+  function bindSearchInput(input) {
+    if (!input || input.dataset.llsSearchBound === "1") return false;
+    input.dataset.llsSearchBound = "1";
+
+    injectStyles();
+    ensureBaseDataLoaded();
 
     const dd = createDropdown(input);
     let timer, lastQuery = "", reqId = 0;
@@ -1117,6 +1170,7 @@
     function close() {
       dd.style.display = "none";
       activeIndex = -1;
+      showHostSearchResults(input, dd);
     }
 
     function handleEnter() {
@@ -1151,6 +1205,7 @@
           const searchUrl = `https://www.loplabbet.se/katalog?q=${encodeURIComponent(query)}`;
           renderDropdown(dd, query, data, searchUrl);
           positionDropdown(dd, input);
+          hideHostSearchResults(input, dd);
           dd.style.display = "block";
           activeIndex = -1;
 
@@ -1161,9 +1216,8 @@
             productHits = productHits.filter(h => !isClothingProduct(h));
           }
           const productHitsForInference = productHits;
-          const specificProductQuery = isSpecificProductQuery(query, productHitsForInference);
-          let pinnedGuides = specificProductQuery ? [] : getPinnedGuides(query);
-          if (!specificProductQuery && pinnedGuides.length === 0) {
+          let pinnedGuides = getPinnedGuides(query);
+          if (pinnedGuides.length === 0) {
             pinnedGuides = inferGuideFromProducts(productHitsForInference);
           }
           let matchedBrands = findMatchingBrands(query);
@@ -1218,7 +1272,27 @@
       if (dd.style.display !== "none") positionDropdown(dd, input);
     });
 
-    console.log("[LLS] Search widget v4.6 redo.");
+    console.log("[LLS] Search widget v4.6 kopplad till sökfält.");
+    return true;
+  }
+
+  function init() {
+    injectStyles();
+
+    function bindAvailableInputs() {
+      let boundAny = false;
+      for (const input of findSearchInputs()) {
+        boundAny = bindSearchInput(input) || boundAny;
+      }
+      return boundAny;
+    }
+
+    if (!bindAvailableInputs()) {
+      console.log("[LLS] Väntar på sökfält...");
+    }
+
+    const observer = new MutationObserver(() => bindAvailableInputs());
+    observer.observe(document.documentElement, { childList: true, subtree: true });
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
