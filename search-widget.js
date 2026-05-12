@@ -626,6 +626,32 @@
       .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   }
 
+  function getShoeImageUrl(productUrl) {
+    const match = String(productUrl || "").match(/\/product\/(\d+)\/(\d{2})/);
+    if (!match) return "";
+    return `https://antonlundin-loplabbet.github.io/loplabbet-shoes/shoe-images/${match[1]}${match[2]}.jpg`;
+  }
+
+  function isShoeProductDocument(d) {
+    const haystack = [
+      d.name,
+      d.category,
+      d.subcategory,
+      d.shoe_type,
+      d.description
+    ].filter(Boolean).join(" ").toLowerCase();
+    return /sko|skor|löparsko|löparskor|kolfibersko|kolfiberskor|racingsko|racingskor|terrängsko|terrängskor|trail/.test(haystack);
+  }
+
+  function getProductImageHtml(d) {
+    const fallback = d.image_url || "";
+    const shoeImage = isShoeProductDocument(d) ? getShoeImageUrl(d.product_url) : "";
+    const src = shoeImage || fallback;
+    if (!src) return "";
+    const fallbackAttr = fallback && fallback !== src ? ` data-fallback="${esc(fallback)}"` : "";
+    return `<img src="${esc(src)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"${fallbackAttr} onerror="if(this.dataset.fallback&&this.src!==this.dataset.fallback){this.src=this.dataset.fallback;this.removeAttribute('data-fallback');}else{this.style.display='none';}">`;
+  }
+
   // ── Typesense multi_search ─────────────────────────────────────────────
   async function search(query) {
     const brand = detectBrand(query);
@@ -783,7 +809,7 @@
       for (const hit of productHits) {
         const d   = hit.document;
         const url = esc(d.product_url || "#");
-        const img = esc(d.image_url || "");
+        const img = getProductImageHtml(d);
         const hasDisc = d.sale_price && d.sale_price < d.price;
         const priceHtml = hasDisc
           ? `<s class="lls-p-old">${formatPrice(d.price)}</s><span class="lls-p-sale">${formatPrice(d.sale_price)}</span>`
@@ -792,7 +818,7 @@
 
         rightHtml += `
           <a class="lls-prod-row" href="${url}">
-            <div class="lls-prod-img">${img ? `<img src="${img}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ""}</div>
+            <div class="lls-prod-img">${img}</div>
             <div class="lls-prod-info">
               <div class="lls-prod-brand">${esc(d.brand || "")}</div>
               <div class="lls-prod-name">${esc(d.name || "")}</div>
@@ -911,10 +937,10 @@
       }
       .lls-prod-img {
         width:50px; height:50px; flex-shrink:0;
-        border-radius:5px; background:#f6f6f6;
-        display:flex; align-items:center; justify-content:center; overflow:hidden;
+        border-radius:5px; background:transparent;
+        display:flex; align-items:center; justify-content:center; overflow:visible;
       }
-      .lls-prod-img img { width:100%; height:100%; object-fit:contain; }
+      .lls-prod-img img { width:112%; height:112%; object-fit:contain; mix-blend-mode:multiply; }
       .lls-prod-info  { flex:1; min-width:0; }
       .lls-prod-brand { font-size:10px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:#999; }
       .lls-prod-name  { font-size:12.5px; line-height:1.3; color:#111;
@@ -940,12 +966,14 @@
           border-right:none;
           border-radius:0;
           box-shadow:0 8px 18px rgba(0,0,0,.12);
+          overflow-y:auto;
         }
         .lls-grid {
           display:grid;
           grid-template-columns:1fr;
-          max-height:calc(100dvh - 150px);
-          overflow-y:auto;
+          min-height:100%;
+          max-height:none;
+          overflow:visible;
         }
         .lls-grid .lls-col-right {
           grid-column:1;
@@ -976,6 +1004,7 @@
           padding:16px 20px 8px;
           font-size:13px;
           letter-spacing:.11em;
+          color:#777;
         }
         .lls-page-row {
           padding:11px 20px;
@@ -989,13 +1018,17 @@
           border-top:1px solid #f1f1f1;
         }
         .lls-prod-img {
-          width:74px;
-          height:74px;
+          width:88px;
+          height:78px;
           border-radius:6px;
+        }
+        .lls-prod-img img {
+          width:122%;
+          height:122%;
         }
         .lls-prod-brand {
           font-size:13px;
-          color:#999;
+          color:#777;
         }
         .lls-prod-name {
           font-size:16px;
@@ -1008,6 +1041,7 @@
         .lls-prod-specs {
           margin-top:4px;
           font-size:13.5px;
+          color:#666;
           white-space:normal;
           display:-webkit-box;
           -webkit-line-clamp:1;
@@ -1104,14 +1138,33 @@
     return dd;
   }
 
+  function getMobileHeaderBottom(input, inputRect) {
+    let bestBottom = inputRect.bottom;
+
+    for (let el = input.parentElement; el && el !== document.body; el = el.parentElement) {
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      if (r.width < window.innerWidth * 0.8) continue;
+      if (r.top > inputRect.top + 1 || r.bottom < inputRect.bottom - 1) continue;
+      if (r.bottom > bestBottom && r.bottom <= inputRect.bottom + 96) {
+        bestBottom = r.bottom;
+      }
+    }
+
+    return Math.max(0, Math.round(bestBottom - 1));
+  }
+
   function positionDropdown(dd, input) {
     const ir = input.getBoundingClientRect();
     const viewportWidth = window.innerWidth;
     const margin = 8; // säkerhetsavstånd från skärmkanterna
     if (viewportWidth <= 640) {
-      dd.style.top = (ir.bottom - 1) + "px";
+      const top = getMobileHeaderBottom(input, ir);
+      dd.style.top = top + "px";
       dd.style.left = "0px";
       dd.style.width = viewportWidth + "px";
+      dd.style.height = `calc(100dvh - ${top}px)`;
+      dd.style.maxHeight = `calc(100dvh - ${top}px)`;
       return;
     }
 
@@ -1133,6 +1186,8 @@
     dd.style.top   = (ir.bottom - 1) + "px";
     dd.style.left  = leftAbsolute + "px";
     dd.style.width = finalWidth + "px";
+    dd.style.height = "";
+    dd.style.maxHeight = "";
   }
 
   function getSearchSurfaceRect(input, inputRect = input.getBoundingClientRect()) {
