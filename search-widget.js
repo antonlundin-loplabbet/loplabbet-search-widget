@@ -64,6 +64,11 @@
     return new URLSearchParams(window.location.search).get("lls_search_test") === "1";
   }
 
+  function silenceHostSearchEvent(e) {
+    if (!isTestMode()) return;
+    e.stopImmediatePropagation();
+  }
+
   async function loadProductSchema() {
     try {
       const url = `https://${HOST}/collections/products` +
@@ -1122,6 +1127,8 @@
         containsInput &&
         r.width >= inputRect.width &&
         r.width <= viewportWidth - 8 &&
+        r.left >= inputRect.left - 120 &&
+        r.right <= inputRect.right + 120 &&
         r.left >= -4 &&
         r.right <= viewportWidth + 4;
 
@@ -1292,10 +1299,20 @@
       }
     }
 
-    input.addEventListener("input", () => {
+    function handleInputEvent(e) {
+      silenceHostSearchEvent(e);
       clearTimeout(timer);
       const query = input.value.trim();
-      if (query.length < MIN_QUERY_LENGTH) { close(); lastEnterState = null; return; }
+      if (query.length < MIN_QUERY_LENGTH) {
+        lastEnterState = null;
+        if (isTestMode()) {
+          keepHostSearchHidden(input, dd);
+          dd.style.display = "none";
+        } else {
+          close();
+        }
+        return;
+      }
       if (query === lastQuery) return;
 
       timer = setTimeout(async () => {
@@ -1335,17 +1352,37 @@
           };
         } catch (e) { console.error("[LLS]", e); }
       }, DEBOUNCE_MS);
-    });
+    }
+
+    input.addEventListener("input", handleInputEvent, true);
+    input.addEventListener("keyup", (e) => {
+      silenceHostSearchEvent(e);
+      if (isTestMode()) keepHostSearchHidden(input, dd);
+    }, true);
+    input.addEventListener("click", (e) => {
+      silenceHostSearchEvent(e);
+      keepHostSearchHidden(input, dd);
+    }, true);
+    input.addEventListener("mousedown", (e) => {
+      silenceHostSearchEvent(e);
+      keepHostSearchHidden(input, dd);
+    }, true);
+    input.addEventListener("mouseup", (e) => {
+      silenceHostSearchEvent(e);
+      keepHostSearchHidden(input, dd);
+    }, true);
 
     document.addEventListener("click", e => {
       if (!dd.contains(e.target) && e.target !== input) close();
     });
 
-    input.addEventListener("focus", () => {
+    input.addEventListener("focus", (e) => {
+      silenceHostSearchEvent(e);
       keepHostSearchHidden(input, dd);
-    });
+    }, true);
 
     input.addEventListener("keydown", e => {
+      silenceHostSearchEvent(e);
       if (e.key === "Escape") { close(); input.blur(); return; }
 
       const isOpen = dd.style.display === "block";
@@ -1372,7 +1409,7 @@
         e.preventDefault();
         handleEnter();
       }
-    });
+    }, true);
 
     window.addEventListener("resize", () => {
       if (dd.style.display !== "none") positionDropdown(dd, input);
