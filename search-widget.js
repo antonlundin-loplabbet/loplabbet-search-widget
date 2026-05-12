@@ -57,6 +57,8 @@
   let HAS_SHOE_TYPE = false;
   let HAS_TECH_FIELDS = false;
   let BASE_DATA_LOADED = false;
+  let ACTIVE_INPUT = null;
+  let ACTIVE_DROPDOWN = null;
 
   function isTestMode() {
     return new URLSearchParams(window.location.search).get("lls_search_test") === "1";
@@ -1083,15 +1085,16 @@
     const ir = input.getBoundingClientRect();
     const viewportWidth = window.innerWidth;
     const margin = 8; // säkerhetsavstånd från skärmkanterna
+    const surface = getSearchSurfaceRect(input, ir);
 
     // Önskad bredd: minst input-bredden, minst 680px på desktop,
     // men aldrig bredare än viewport.
-    const desiredWidth = Math.max(ir.width, 680);
+    const desiredWidth = Math.max(surface.width, ir.width, 680);
     const maxWidth = viewportWidth - margin * 2;
     const finalWidth = Math.min(desiredWidth, maxWidth);
 
     // Justera left så dropdown inte flödar utanför skärmen i vänster/höger kant.
-    let leftAbsolute = ir.left;
+    let leftAbsolute = surface.left;
     if (leftAbsolute + finalWidth > viewportWidth - margin) {
       leftAbsolute = viewportWidth - margin - finalWidth;
     }
@@ -1100,6 +1103,35 @@
     dd.style.top   = (ir.bottom - 1) + "px";
     dd.style.left  = leftAbsolute + "px";
     dd.style.width = finalWidth + "px";
+  }
+
+  function getSearchSurfaceRect(input, inputRect = input.getBoundingClientRect()) {
+    const viewportWidth = window.innerWidth;
+    let best = inputRect;
+
+    for (let el = input.parentElement; el && el !== document.body; el = el.parentElement) {
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+
+      const containsInput =
+        r.left <= inputRect.left + 1 &&
+        r.right >= inputRect.right - 1 &&
+        r.top <= inputRect.top + 1 &&
+        r.bottom >= inputRect.bottom - 1;
+      const plausibleOverlay =
+        containsInput &&
+        r.width >= inputRect.width &&
+        r.width <= viewportWidth - 8 &&
+        r.left >= -4 &&
+        r.right <= viewportWidth + 4;
+
+      if (!plausibleOverlay) continue;
+
+      const growsUsefully = r.width > best.width + 12 || r.left < best.left - 8 || r.right > best.right + 8;
+      if (growsUsefully) best = r;
+    }
+
+    return best;
   }
 
   function hideHostSearchResults(input, dd) {
@@ -1166,10 +1198,28 @@
   }
 
   function showHostSearchResults(input, dd) {
+    if (ACTIVE_INPUT === input) ACTIVE_INPUT = null;
+    if (ACTIVE_DROPDOWN === dd) ACTIVE_DROPDOWN = null;
     document.documentElement.classList.remove("lls-active-search");
     for (const el of document.querySelectorAll(".lls-host-hidden")) {
       if (el !== dd && !dd.contains(el)) el.classList.remove("lls-host-hidden");
     }
+  }
+
+  function keepHostSearchHidden(input, dd) {
+    ACTIVE_INPUT = input;
+    ACTIVE_DROPDOWN = dd;
+    hideHostSearchResults(input, dd);
+    setTimeout(() => {
+      if (ACTIVE_INPUT === input && ACTIVE_DROPDOWN === dd && dd.style.display !== "none") {
+        hideHostSearchResults(input, dd);
+      }
+    }, 50);
+    setTimeout(() => {
+      if (ACTIVE_INPUT === input && ACTIVE_DROPDOWN === dd && dd.style.display !== "none") {
+        hideHostSearchResults(input, dd);
+      }
+    }, 180);
   }
 
   // ── Tangentbordsnavigation: hitta alla länkar i dropdown och markera ──
@@ -1257,7 +1307,7 @@
           const searchUrl = `https://www.loplabbet.se/katalog?q=${encodeURIComponent(query)}`;
           renderDropdown(dd, query, data, searchUrl);
           positionDropdown(dd, input);
-          hideHostSearchResults(input, dd);
+          keepHostSearchHidden(input, dd);
           dd.style.display = "block";
           activeIndex = -1;
 
@@ -1292,7 +1342,7 @@
     });
 
     input.addEventListener("focus", () => {
-      hideHostSearchResults(input, dd);
+      keepHostSearchHidden(input, dd);
     });
 
     input.addEventListener("keydown", e => {
@@ -1339,6 +1389,10 @@
       let boundAny = false;
       for (const input of findSearchInputs()) {
         boundAny = bindSearchInput(input) || boundAny;
+      }
+      if (ACTIVE_INPUT && ACTIVE_DROPDOWN && ACTIVE_DROPDOWN.style.display !== "none") {
+        positionDropdown(ACTIVE_DROPDOWN, ACTIVE_INPUT);
+        hideHostSearchResults(ACTIVE_INPUT, ACTIVE_DROPDOWN);
       }
       return boundAny;
     }
