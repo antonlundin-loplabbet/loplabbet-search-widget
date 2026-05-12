@@ -1012,48 +1012,49 @@
         }
         .lls-prod-row {
           align-items:center;
-          gap:16px;
+          gap:14px;
           min-height:92px;
-          padding:13px 20px;
+          padding:12px 18px;
           border-top:1px solid #f1f1f1;
         }
         .lls-prod-img {
-          width:88px;
-          height:78px;
+          width:82px;
+          height:72px;
           border-radius:6px;
         }
         .lls-prod-img img {
-          width:122%;
-          height:122%;
+          width:120%;
+          height:120%;
         }
         .lls-prod-brand {
-          font-size:13px;
-          color:#777;
+          font-size:12px;
+          color:#707070;
         }
         .lls-prod-name {
-          font-size:16px;
-          line-height:1.22;
+          font-size:14.5px;
+          line-height:1.18;
           white-space:normal;
           display:-webkit-box;
           -webkit-line-clamp:2;
           -webkit-box-orient:vertical;
         }
         .lls-prod-specs {
-          margin-top:4px;
-          font-size:13.5px;
-          color:#666;
+          margin-top:5px;
+          font-size:12.5px;
+          line-height:1.25;
+          color:#626262;
           white-space:normal;
           display:-webkit-box;
-          -webkit-line-clamp:1;
+          -webkit-line-clamp:2;
           -webkit-box-orient:vertical;
         }
         .lls-prod-price {
-          min-width:72px;
+          min-width:68px;
           padding-top:0;
         }
         .lls-p-reg,
         .lls-p-sale {
-          font-size:16px;
+          font-size:15px;
         }
         .lls-footer {
           padding:14px 20px;
