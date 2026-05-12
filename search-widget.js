@@ -626,6 +626,8 @@
   }
 
   function isTeamPrice(d) {
+    if (d.is_member_price === true) return true;
+    if (d.member_price && d.sale_price && Number(d.member_price) === Number(d.sale_price)) return true;
     const text = [
       d.price_type,
       d.price_label,
