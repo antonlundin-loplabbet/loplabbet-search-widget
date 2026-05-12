@@ -620,6 +620,24 @@
     return p ? Math.round(p).toLocaleString("sv-SE") + "\u00a0kr" : "";
   }
 
+  function getGenderLabel(d) {
+    const gender = String(d.gender || "").trim();
+    return gender ? gender.toUpperCase() : "";
+  }
+
+  function isTeamPrice(d) {
+    const text = [
+      d.price_type,
+      d.price_label,
+      d.campaign_type,
+      d.campaign_label,
+      d.promotion,
+      d.custom_label_0,
+      d.custom_label_1
+    ].filter(Boolean).join(" ").toLowerCase();
+    return text.includes("team");
+  }
+
   function esc(s) {
     return String(s || "")
       .replace(/&/g,"&amp;").replace(/</g,"&lt;")
@@ -811,16 +829,18 @@
         const url = esc(d.product_url || "#");
         const img = getProductImageHtml(d);
         const hasDisc = d.sale_price && d.sale_price < d.price;
+        const teamPrice = hasDisc && isTeamPrice(d);
         const priceHtml = hasDisc
-          ? `<s class="lls-p-old">${formatPrice(d.price)}</s><span class="lls-p-sale">${formatPrice(d.sale_price)}</span>`
+          ? `<s class="lls-p-old">${formatPrice(d.price)}</s><span class="${teamPrice ? "lls-p-team" : "lls-p-sale"}">${formatPrice(d.sale_price)}</span>`
           : `<span class="lls-p-reg">${formatPrice(d.price)}</span>`;
         const specs = buildSpecLine(d);
+        const gender = getGenderLabel(d);
 
         rightHtml += `
           <a class="lls-prod-row" href="${url}">
             <div class="lls-prod-img">${img}</div>
             <div class="lls-prod-info">
-              <div class="lls-prod-brand">${esc(d.brand || "")}</div>
+              <div class="lls-prod-brand">${esc(d.brand || "")}${gender ? `<span class="lls-prod-gender">${esc(gender)}</span>` : ""}</div>
               <div class="lls-prod-name">${esc(d.name || "")}</div>
               ${specs ? `<div class="lls-prod-specs">${esc(specs)}</div>` : ""}
             </div>
@@ -942,7 +962,8 @@
       }
       .lls-prod-img img { width:112%; height:112%; object-fit:contain; mix-blend-mode:multiply; }
       .lls-prod-info  { flex:1; min-width:0; }
-      .lls-prod-brand { font-size:10px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:#999; }
+      .lls-prod-brand { font-size:10px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:#087f9f; }
+      .lls-prod-gender { display:inline; margin-left:4px; }
       .lls-prod-name  { font-size:12.5px; line-height:1.3; color:#111;
         white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .lls-prod-specs { font-size:10.5px; color:#888; margin-top:2px;
@@ -951,6 +972,7 @@
       .lls-p-reg  { font-size:13px; font-weight:600; color:#111; }
       .lls-p-old  { display:block; font-size:11px; color:#bbb; }
       .lls-p-sale { display:block; font-size:13px; font-weight:700; color:${PINK}; }
+      .lls-p-team { display:block; font-size:13px; font-weight:700; color:#087f9f; }
       .lls-footer {
         grid-column:1/-1; padding:11px 14px;
         border-top:1px solid #f0f0f0; text-align:center;
@@ -1028,10 +1050,11 @@
         }
         .lls-prod-brand {
           font-size:12px;
-          color:#707070;
+          line-height:1.1;
+          color:#087f9f;
         }
         .lls-prod-name {
-          font-size:14.5px;
+          font-size:13.5px;
           line-height:1.18;
           white-space:normal;
           display:-webkit-box;
@@ -1053,7 +1076,8 @@
           padding-top:0;
         }
         .lls-p-reg,
-        .lls-p-sale {
+        .lls-p-sale,
+        .lls-p-team {
           font-size:15px;
         }
         .lls-footer {
