@@ -49,6 +49,10 @@
     { terms: ["stabil", "stabilitet", "stability", "pronationsstöd", "pronation", "överpronation", "stöd", "motionkontroll", "motion control", "kontroll"], filter: "stability:=`Stabil`" },
     { terms: ["neutral", "neutralt", "neutral löpning", "neutral sko", "neutral löpare"], filter: "stability:=[`Flexibel`,`Medium`]" },
   ];
+  const GENERIC_SHOE_TERMS = [
+    "löparskor", "löparsko", "running shoes", "running shoe",
+    "skor", "sko", "shoe", "shoes"
+  ];
 
   // Varumärken hämtas från Typesense vid widgetstart — undviker att
   // hårdkoda alla varianter ("Hoka" vs "Hoka One One" vs "HOKA").
@@ -474,7 +478,8 @@
   }
 
   function stripTermsFromQuery(query, terms) {
-    return terms.reduce((q, term) => {
+    const orderedTerms = [...terms].sort((a, b) => b.length - a.length);
+    return orderedTerms.reduce((q, term) => {
       const escaped = escapeRegex(term).replace(/\s+/g, "\\s+");
       return q.replace(new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}(?=$|[^\\p{L}\\p{N}])`, "giu"), " ");
     }, query).replace(/\s+/g, " ").trim();
@@ -496,7 +501,7 @@
       for (const intent of TECH_INTENTS) {
         if (intent.terms.some(term => hasQueryTerm(query, term))) {
           filters.push(intent.filter);
-          stripTerms.push(...intent.terms);
+          stripTerms.push(...intent.terms, ...GENERIC_SHOE_TERMS);
         }
       }
     }
