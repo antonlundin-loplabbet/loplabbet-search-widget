@@ -847,6 +847,11 @@
       html.lls-active-search [class*="autocomplete" i] {
         display:none !important;
       }
+      .lls-search-pill-reset,
+      .lls-search-pill-reset input {
+        border-bottom-left-radius:999px !important;
+        border-bottom-right-radius:999px !important;
+      }
       .lls-grid {
         display:grid;
         grid-template-columns:42% 58%;
@@ -1141,6 +1146,48 @@
     return best;
   }
 
+  function getSearchSurfaceElement(input, inputRect = input.getBoundingClientRect()) {
+    const viewportWidth = window.innerWidth;
+    let best = input;
+    let bestRect = inputRect;
+
+    for (let el = input.parentElement; el && el !== document.body; el = el.parentElement) {
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+
+      const containsInput =
+        r.left <= inputRect.left + 1 &&
+        r.right >= inputRect.right - 1 &&
+        r.top <= inputRect.top + 1 &&
+        r.bottom >= inputRect.bottom - 1;
+      const plausibleSurface =
+        containsInput &&
+        r.width >= inputRect.width &&
+        r.width <= viewportWidth - 8 &&
+        r.left >= inputRect.left - 120 &&
+        r.right <= inputRect.right + 120 &&
+        r.left >= -4 &&
+        r.right <= viewportWidth + 4;
+
+      if (!plausibleSurface) continue;
+
+      const growsUsefully = r.width > bestRect.width + 12 || r.left < bestRect.left - 8 || r.right > bestRect.right + 8;
+      if (growsUsefully) {
+        best = el;
+        bestRect = r;
+      }
+    }
+
+    return best;
+  }
+
+  function setSearchPillReset(input, enabled) {
+    const surface = getSearchSurfaceElement(input);
+    for (const el of [input, surface]) {
+      if (el) el.classList.toggle("lls-search-pill-reset", enabled);
+    }
+  }
+
   function hideHostSearchResults(input, dd) {
     if (isTestMode()) document.documentElement.classList.add("lls-active-search");
 
@@ -1207,6 +1254,7 @@
   function showHostSearchResults(input, dd) {
     if (ACTIVE_INPUT === input) ACTIVE_INPUT = null;
     if (ACTIVE_DROPDOWN === dd) ACTIVE_DROPDOWN = null;
+    setSearchPillReset(input, false);
     document.documentElement.classList.remove("lls-active-search");
     for (const el of document.querySelectorAll(".lls-host-hidden")) {
       if (el !== dd && !dd.contains(el)) el.classList.remove("lls-host-hidden");
@@ -1308,6 +1356,7 @@
         if (isTestMode()) {
           keepHostSearchHidden(input, dd);
           dd.style.display = "none";
+          setSearchPillReset(input, true);
         } else {
           close();
         }
@@ -1324,6 +1373,7 @@
           const searchUrl = `https://www.loplabbet.se/katalog?q=${encodeURIComponent(query)}`;
           renderDropdown(dd, query, data, searchUrl);
           positionDropdown(dd, input);
+          setSearchPillReset(input, false);
           keepHostSearchHidden(input, dd);
           dd.style.display = "block";
           activeIndex = -1;
