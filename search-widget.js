@@ -936,13 +936,15 @@
 
       @media (max-width:640px) {
         #lls-dropdown {
-          border-radius:7px;
-          box-shadow:0 10px 28px rgba(0,0,0,.16);
+          border-left:none;
+          border-right:none;
+          border-radius:0;
+          box-shadow:0 8px 18px rgba(0,0,0,.12);
         }
         .lls-grid {
           display:grid;
           grid-template-columns:1fr;
-          max-height:82vh;
+          max-height:calc(100dvh - 150px);
           overflow-y:auto;
         }
         .lls-grid .lls-col-right {
@@ -971,48 +973,59 @@
           border-top:1px solid #f4f4f4;
         }
         .lls-col-header {
-          padding:11px 12px 4px;
-          font-size:10px;
+          padding:16px 20px 8px;
+          font-size:13px;
+          letter-spacing:.11em;
         }
         .lls-page-row {
-          padding:8px 12px;
-          font-size:13px;
+          padding:11px 20px;
+          font-size:16px;
         }
         .lls-prod-row {
-          align-items:flex-start;
-          gap:9px;
-          padding:9px 12px;
+          align-items:center;
+          gap:16px;
+          min-height:92px;
+          padding:13px 20px;
+          border-top:1px solid #f1f1f1;
         }
         .lls-prod-img {
-          width:44px;
-          height:44px;
+          width:74px;
+          height:74px;
+          border-radius:6px;
+        }
+        .lls-prod-brand {
+          font-size:13px;
+          color:#999;
         }
         .lls-prod-name {
-          font-size:12.5px;
+          font-size:16px;
+          line-height:1.22;
           white-space:normal;
           display:-webkit-box;
           -webkit-line-clamp:2;
           -webkit-box-orient:vertical;
         }
         .lls-prod-specs {
+          margin-top:4px;
+          font-size:13.5px;
           white-space:normal;
           display:-webkit-box;
           -webkit-line-clamp:1;
           -webkit-box-orient:vertical;
         }
         .lls-prod-price {
-          min-width:58px;
-          padding-top:12px;
+          min-width:72px;
+          padding-top:0;
         }
         .lls-p-reg,
         .lls-p-sale {
-          font-size:12.5px;
+          font-size:16px;
         }
         .lls-footer {
-          padding:12px;
+          padding:14px 20px;
         }
         .lls-footer a {
-          font-size:12.5px;
+          font-size:15px;
         }
       }
     `;
@@ -1095,6 +1108,13 @@
     const ir = input.getBoundingClientRect();
     const viewportWidth = window.innerWidth;
     const margin = 8; // säkerhetsavstånd från skärmkanterna
+    if (viewportWidth <= 640) {
+      dd.style.top = (ir.bottom - 1) + "px";
+      dd.style.left = "0px";
+      dd.style.width = viewportWidth + "px";
+      return;
+    }
+
     const surface = getSearchSurfaceRect(input, ir);
 
     // Önskad bredd: minst input-bredden, minst 680px på desktop,
