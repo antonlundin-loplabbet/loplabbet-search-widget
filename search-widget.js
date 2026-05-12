@@ -42,7 +42,7 @@
   ];
 
   const TECH_INTENTS = [
-    { terms: ["bred", "bred passform", "bredare", "vid passform", "wide", "wide fit", "extra wide", "extra bred", "bredläst", "bred läst", "bred fot", "breda fötter", "bredare fötter", "vidläst"], filter: "last_width:=[`Bred`,`Extra bred`]" },
+    { terms: ["bred", "breda", "bred sko", "breda skor", "bred löparsko", "breda löparskor", "bred passform", "bredare", "vid passform", "wide", "wide shoe", "wide shoes", "wide fit", "extra wide", "extra bred", "bredläst", "bred läst", "bred fot", "breda fötter", "bredare fötter", "vidläst"], filter: "last_width:=[`Bred`,`Extra bred`]" },
     { terms: ["smal", "smal passform", "narrow", "narrow fit", "smalläst", "smal läst", "smal fot", "smala fötter"], filter: "last_width:=`Smal`" },
     { terms: ["mjuk", "mjukt", "dämpad", "mjuk dämpning", "max dämpning", "maxdämpad", "maximal dämpning", "plush", "soft cushioning", "väldigt dämpad", "supermjuk", "extra dämpad"], filter: "cushioning:=`Mjuk`" },
     { terms: ["fast dämpning", "fastdämpning", "responsiv", "responsiv dämpning", "snabb dämpning", "firm cushioning"], filter: "cushioning:=`Fast`" },
