@@ -488,6 +488,7 @@
   function getIntentFilters(query) {
     const filters = [];
     const stripTerms = [];
+    const normalizedQuery = String(query || "").toLowerCase();
 
     for (const intent of GENDER_INTENTS) {
       if (intent.terms.some(term => hasQueryTerm(query, term))) {
@@ -498,6 +499,11 @@
     }
 
     if (HAS_TECH_FIELDS) {
+      if (/\bbred(a|are)?\s+(sko|skor|löparsko|löparskor)\b/u.test(normalizedQuery)) {
+        filters.push("last_width:=[`Bred`,`Extra bred`]");
+        stripTerms.push(...TECH_INTENTS[0].terms, ...GENERIC_SHOE_TERMS);
+      }
+
       for (const intent of TECH_INTENTS) {
         if (intent.terms.some(term => hasQueryTerm(query, term))) {
           filters.push(intent.filter);
