@@ -1,5 +1,5 @@
 /**
- * Löplabbet Search Widget v4.6
+ * Löplabbet Search Widget v4.7
  * - Smart-Enter: prioriterar markerad träff → märkessida/enda träff → katalogsök
  * - Tangentbordsnavigation: Pil upp/ner, Enter, Esc
  * - Egen "Pinnade guider"-sektion
@@ -12,6 +12,8 @@
   const HOST    = "h5kyqpilug0b769np-1.a1.typesense.net";
   const API_KEY = "r9WyqVZBkIH9WhbcT57jWa2HzHxehiFc";
   const PINK    = "#E91E7B";
+  const WIDE_LAST_FILTER = "last_width:=[`Bred`,`Extra bred`]";
+  const NARROW_LAST_FILTER = "last_width:=`Smal`";
 
   // Klädesord i söktermen → visa kläder i produkter
   const CLOTHING_QUERY_KW = [
@@ -42,8 +44,8 @@
   ];
 
   const TECH_INTENTS = [
-    { terms: ["bred", "breda", "bred sko", "breda skor", "bred löparsko", "breda löparskor", "bred passform", "bredare", "vid passform", "wide", "wide shoe", "wide shoes", "wide fit", "extra wide", "extra bred", "bredläst", "bred läst", "bred fot", "breda fötter", "bredare fötter", "vidläst"], filter: "last_width:=[`Bred`,`Extra bred`]" },
-    { terms: ["smal", "smal passform", "narrow", "narrow fit", "smalläst", "smal läst", "smal fot", "smala fötter"], filter: "last_width:=`Smal`" },
+    { terms: ["bred", "breda", "bred sko", "breda skor", "bred löparsko", "breda löparskor", "bred passform", "breda passform", "bredare", "vid passform", "wide", "wide shoe", "wide shoes", "wide fit", "extra wide", "extra bred", "extra breda", "bredläst", "bred läst", "bred fot", "breda fötter", "bredare fötter", "vidläst"], filter: WIDE_LAST_FILTER },
+    { terms: ["smal", "smal passform", "narrow", "narrow fit", "smalläst", "smal läst", "smal fot", "smala fötter"], filter: NARROW_LAST_FILTER },
     { terms: ["mjuk", "mjukt", "dämpad", "mjuk dämpning", "max dämpning", "maxdämpad", "maximal dämpning", "plush", "soft cushioning", "väldigt dämpad", "supermjuk", "extra dämpad"], filter: "cushioning:=`Mjuk`" },
     { terms: ["fast dämpning", "fastdämpning", "responsiv", "responsiv dämpning", "snabb dämpning", "firm cushioning"], filter: "cushioning:=`Fast`" },
     { terms: ["stabil", "stabilitet", "stability", "pronationsstöd", "pronation", "överpronation", "stöd", "motionkontroll", "motion control", "kontroll"], filter: "stability:=`Stabil`" },
@@ -59,10 +61,11 @@
   // [{name, slug, count}, ...]
   let BRAND_INDEX = [];
   let HAS_SHOE_TYPE = false;
-  let HAS_TECH_FIELDS = false;
+  let HAS_TECH_FIELDS = true;
   let BASE_DATA_LOADED = false;
   let ACTIVE_INPUT = null;
   let ACTIVE_DROPDOWN = null;
+  let ACTIVE_QUERY = "";
 
   function isTestMode() {
     return new URLSearchParams(window.location.search).get("lls_search_test") === "1";
@@ -77,7 +80,8 @@
     try {
       const url = `https://${HOST}/collections/products` +
         `?x-typesense-api-key=${API_KEY}`;
-      const res = await fetch(url);
+      const res = await fetch(url, { headers: { "X-TYPESENSE-API-KEY": API_KEY } });
+      if (!res.ok) throw new Error(`Typesense schema ${res.status}`);
       const data = await res.json();
       const has = (name) => !!data.fields?.some(f => f.name === name);
       const hasField = has("shoe_type");
@@ -489,10 +493,13 @@
     const filters = [];
     const stripTerms = [];
     const normalizedQuery = String(query || "").toLowerCase();
+    const addFilter = (filter) => {
+      if (!filters.includes(filter)) filters.push(filter);
+    };
 
     for (const intent of GENDER_INTENTS) {
       if (intent.terms.some(term => hasQueryTerm(query, term))) {
-        filters.push(intent.filter);
+        addFilter(intent.filter);
         stripTerms.push(...intent.terms);
         break;
       }
@@ -500,13 +507,13 @@
 
     if (HAS_TECH_FIELDS) {
       if (/\bbred(a|are)?\s+(sko|skor|löparsko|löparskor)\b/u.test(normalizedQuery)) {
-        filters.push("last_width:=[`Bred`,`Extra bred`]");
+        addFilter(WIDE_LAST_FILTER);
         stripTerms.push(...TECH_INTENTS[0].terms, ...GENERIC_SHOE_TERMS);
       }
 
       for (const intent of TECH_INTENTS) {
         if (intent.terms.some(term => hasQueryTerm(query, term))) {
-          filters.push(intent.filter);
+          addFilter(intent.filter);
           stripTerms.push(...intent.terms, ...GENERIC_SHOE_TERMS);
         }
       }
@@ -1176,6 +1183,34 @@
     return dd;
   }
 
+  function isVisibleSearchInput(input) {
+    if (!input || !document.documentElement.contains(input)) return false;
+    const r = input.getBoundingClientRect();
+    const style = window.getComputedStyle(input);
+    return r.width > 0 && r.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+  }
+
+  function restoreActiveQueryToSearchInputs() {
+    if (!ACTIVE_QUERY || !ACTIVE_DROPDOWN || ACTIVE_DROPDOWN.style.display === "none") return;
+    const inputs = findSearchInputs();
+    const targets = [
+      ACTIVE_INPUT,
+      ...inputs.filter(input => input !== ACTIVE_INPUT && isVisibleSearchInput(input))
+    ].filter(Boolean);
+
+    for (const target of targets) {
+      if (!target.value) {
+        target.value = ACTIVE_QUERY;
+        target.setAttribute("value", ACTIVE_QUERY);
+      }
+    }
+
+    const visible = inputs.find(isVisibleSearchInput);
+    if (visible && (!ACTIVE_INPUT || !isVisibleSearchInput(ACTIVE_INPUT))) {
+      ACTIVE_INPUT = visible;
+    }
+  }
+
   function getMobileHeaderBottom(input, inputRect) {
     let bestBottom = inputRect.bottom;
 
@@ -1377,6 +1412,7 @@
   function keepHostSearchHidden(input, dd) {
     ACTIVE_INPUT = input;
     ACTIVE_DROPDOWN = dd;
+    restoreActiveQueryToSearchInputs();
     hideHostSearchResults(input, dd);
     setTimeout(() => {
       if (ACTIVE_INPUT === input && ACTIVE_DROPDOWN === dd && dd.style.display !== "none") {
@@ -1420,6 +1456,7 @@
     ensureBaseDataLoaded();
 
     const dd = createDropdown(input);
+    if (ACTIVE_QUERY && !input.value) input.value = ACTIVE_QUERY;
     let timer, lastQuery = "", reqId = 0;
     // State som behövs för Smart-Enter:
     let lastEnterState = null;
@@ -1440,6 +1477,7 @@
     function close() {
       dd.style.display = "none";
       activeIndex = -1;
+      ACTIVE_QUERY = "";
       showHostSearchResults(input, dd);
     }
 
@@ -1463,7 +1501,13 @@
     function handleInputEvent(e) {
       silenceHostSearchEvent(e);
       clearTimeout(timer);
-      const query = input.value.trim();
+      let query = input.value.trim();
+      if (!query && ACTIVE_QUERY && dd.style.display !== "none" && e && e.isTrusted === false) {
+        input.value = ACTIVE_QUERY;
+        query = input.value.trim();
+      } else {
+        ACTIVE_QUERY = input.value;
+      }
       if (query.length < MIN_QUERY_LENGTH) {
         lastEnterState = null;
         if (isTestMode()) {
@@ -1577,8 +1621,14 @@
     window.addEventListener("resize", () => {
       if (dd.style.display !== "none") positionDropdown(dd, input);
     });
+    window.addEventListener("scroll", () => {
+      if (dd.style.display !== "none") {
+        restoreActiveQueryToSearchInputs();
+        positionDropdown(dd, ACTIVE_INPUT || input);
+      }
+    }, true);
 
-    console.log("[LLS] Search widget v4.6 kopplad till sökfält.");
+    console.log("[LLS] Search widget v4.7 kopplad till sökfält.");
     return true;
   }
 
@@ -1591,6 +1641,7 @@
         boundAny = bindSearchInput(input) || boundAny;
       }
       if (ACTIVE_INPUT && ACTIVE_DROPDOWN && ACTIVE_DROPDOWN.style.display !== "none") {
+        restoreActiveQueryToSearchInputs();
         positionDropdown(ACTIVE_DROPDOWN, ACTIVE_INPUT);
         hideHostSearchResults(ACTIVE_INPUT, ACTIVE_DROPDOWN);
       }
